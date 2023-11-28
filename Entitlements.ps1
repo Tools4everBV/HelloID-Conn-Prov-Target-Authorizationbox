@@ -76,7 +76,7 @@ try {
         Method  = 'GET'
         Headers = $headers
     }
-    $organizationRoles = ((Invoke-RestMethod @splatGetOrganizationRoles -Verbose:$false).value | Where-Object { $_.DatabaseConnection -eq "Empire OO" })
+    $organizationRoles = ((Invoke-RestMethod @splatGetOrganizationRoles -Verbose:$false).value | Where-Object { $_.DatabaseConnection -eq $config.Database })
 
     # Verify if there are any assigned permissions in the entitlement context object
     $currentPermissions = [System.Collections.Generic.List[Object]]::new()
@@ -142,13 +142,12 @@ try {
 
     # Process results
     if (-not ($dryRun -eq $true)) {
-        
         $splatGetAuthorization = @{
-            Uri     = "$($config.BaseUrl)/authorizationrequest/Authorization?databaseName=Empire OO&status=Active"
-            Method  = 'GET'
+            Uri     = "$($config.BaseUrl)/authorizationrequest/Authorization/$($aRef)"
+            Method  = 'Get'
             Headers = $headers
         }
-        $authorization = Invoke-RestMethod @splatGetAuthorization -Verbose:$false
+        $authorization = Invoke-RestMethod @splatGetAuthorization -Verbose:$false        
 
         # Add permissions to the authorization 
         foreach ($permission in $permissionsToGrant.GetEnumerator()) {

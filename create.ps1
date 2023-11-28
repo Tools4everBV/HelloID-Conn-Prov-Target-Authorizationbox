@@ -13,11 +13,11 @@ $auditLogs = [System.Collections.Generic.List[PSCustomObject]]::new()
 # Account mapping
 $account = [PSCustomObject]@{
 
-    userID = $p.ExternalId
-    userName = $p.UserName
-    sid = $p.ExternalId
-    surname = $p.Name.FamilyName
-    firstName = $p.Name.GivenName
+    userID       = $p.ExternalId
+    userName     = $p.UserName
+    sid          = $p.ExternalId
+    surname      = $p.Name.FamilyName
+    firstName    = $p.Name.GivenName
     EmailAddress = $p.Accounts.MicrosoftActiveDirectory.mail
 }
 
@@ -68,7 +68,7 @@ try {
         Accept         = 'application/json;odata.metadata=minimal;odata.streaming=true'
     }
     $tokenBody = @{
-        'token' = $config.token
+        'token'    = $config.token
         'username' = $config.UserName
     }
 
@@ -86,21 +86,31 @@ try {
         Authorization  = "Bearer $($accessToken)"
     }
 
-    $splatGetAuthorization= @{
-        Uri     = "$($config.BaseUrl)/authorizationrequest/Authorization"
-        Method  = 'GET'
-        Headers = $headers
-    }
-    $responseUser = ((Invoke-RestMethod @splatGetAuthorization -Verbose:$false) | Where-Object { $_.DatabaseConnection -eq "Empire OO" -and $_.userValueSourcesModel.email -eq $account.EmailAddress})
+    $pageNumber = 0
+    $pageSize = 100
+
+    do {
+        $pageNumber++
+        $splatGetAuthorization = @{
+            Uri     = "$($config.BaseUrl)/authorizationrequest/v2/Authorization?pageNumber=$($pageNumber)&pageSize=$($pageSize)"
+            Method  = 'GET'
+            Headers = $headers
+        }
+
+        $Authorizations = Invoke-RestMethod @splatGetAuthorization -Verbose:$false
+        $responseuser = $Authorizations.data | Where-Object { $_.databaseName -eq $config.Database -and $_.userValueSourcesModel.email -eq $account.EmailAddress }
+        write-verbose -verbose $pageNumber
+    } until (-not($null -eq $responseUser) -or $pageNumber -gt $Authorizations.totalPages)
     
     # Verify if a user must be either [created and correlated], [updated and correlated] or just [correlated]
-    if ($null -eq $responseUser){
+    if ($null -eq $responseUser) {
         throw "User not found, create account in Empire"
     }
 
     if ($updatePerson -eq $true) {
         $action = 'Update-Correlate'
-    } else {
+    }
+    else {
         $action = 'Correlate'
     }
 
@@ -123,24 +133,25 @@ try {
                 }
                 $null = Invoke-RestMethod @splatUpdateAuthorization -Verbose:$false
 
-                $accountReference = $responseUser.securityId
+                $accountReference = $responseUser.code
                 break
             }
 
             'Correlate' {
                 Write-Verbose 'Correlating Authorizationbox account'
-                $accountReference = $responseUser.securityId
+                $accountReference = $responseUser.code
                 break
             }
         }
 
         $success = $true
         $auditLogs.Add([PSCustomObject]@{
-                Message = "$action account was successful. AccountReference is: [$accountReference]"
+                Message = "$action account was successful. AccountReference is: [$($accountReference)]"
                 IsError = $false
             })
     }
-} catch {
+}
+catch {
     $success = $false
     $ex = $PSItem
     if ($($ex.Exception.GetType().FullName -eq 'Microsoft.PowerShell.Commands.HttpResponseException') -or
@@ -148,7 +159,8 @@ try {
         $errorObj = Resolve-AuthorizationboxError -ErrorObject $ex
         $auditMessage = "Could not $action Authorizationbox account. Error: $($errorObj.FriendlyMessage)"
         Write-Verbose "Error at Line '$($errorObj.ScriptLineNumber)': $($errorObj.Line). Error: $($errorObj.ErrorDetails)"
-    } else {
+    }
+    else {
         $auditMessage = "Could not $action Authorizationbox account. Error: $($ex.Exception.Message)"
         Write-Verbose "Error at Line '$($ex.InvocationInfo.ScriptLineNumber)': $($ex.InvocationInfo.Line). Error: $($ex.Exception.Message)"
     }
@@ -156,8 +168,9 @@ try {
             Message = $auditMessage
             IsError = $true
         })
-# End
-} finally {
+    # End
+}
+finally {
     $result = [PSCustomObject]@{
         Success          = $success
         AccountReference = $accountReference
