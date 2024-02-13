@@ -13,8 +13,8 @@ $success = $false
 # Define all empty objects
 $auditLogs = [Collections.Generic.List[PSCustomObject]]::new()
 $subPermissions = [Collections.Generic.List[PSCustomObject]]::new()
-$permissionsToGrant = [System.Collections.Generic.List[object]]::new()
-$permissionsToRevoke = [System.Collections.Generic.List[object]]::new()
+$permissionsToGrant = [System.Collections.Generic.List[PSCustomObject]]::new()
+$permissionsToRevoke = [System.Collections.Generic.List[PSCustomObject]]::new()
 
 #region functions
 function Resolve-AuthorizationboxError {
@@ -35,8 +35,7 @@ function Resolve-AuthorizationboxError {
         }
         try {
             $httpErrorObj.FriendlyMessage = ($httpErrorObj.FriendlyMessage | ConvertFrom-Json).error_description
-        }
-        catch {
+        } catch {
             # Displaying the old message if an error occurs during an API call, as the error is related to the API call and not the conversion process to JSON.
             Write-Warning "Unexpected web-service response, Error during Json conversion: $($_.Exception.Message)"
         }
@@ -71,106 +70,135 @@ try {
         Authorization  = "Bearer $($accessToken)"
     }
 
-    $splatGetOrganizationRoles = @{
-        Uri     = "$($config.BaseUrl)/odata/OrganizationRole"
-        Method  = 'GET'
-        Headers = $headers
-    }
-    $organizationRoles = ((Invoke-RestMethod @splatGetOrganizationRoles -Verbose:$false).value | Where-Object { $_.DatabaseConnection -eq $config.Database })
-
     # Verify if there are any assigned permissions in the entitlement context object
     $currentPermissions = [System.Collections.Generic.List[Object]]::new()
     if ($eRef.CurrentPermissions.Count -gt 0) {
         foreach ($entitlement in $eRef.CurrentPermissions) {
             $currentPermission = @{
-                DisplayName = ($organizationRoles | Where-Object { $_.Name -eq $entitlement.DisplayName }).Name
-                Id          = ($organizationRoles | Where-Object { $_.Key -eq $entitlement.Reference.Id }).Id
+                DisplayName = $entitlement.DisplayName 
+                Id          = $entitlement.Reference.Id
             }
             $currentPermissions.Add($currentPermission)
         }
     }
 
+    
     # Retrieving the desired permissions based on the contracts that fall within the scope of a specific business rule
     # In this case, we assume that the Department.DisplayName corresponds with a groupName in the target application
     $contractsInScope = ($p.Contracts | Where-Object { $_.Context.InConditions -eq $true })
     if ($null -ne $contractsInScope) {
+        $filter = "?`$filter=DatabaseConnection eq '$($config.Database)' and ("
+        $filter += ($contractsinscope.title.name | ForEach-Object { "Name eq '$_'" }) -join " or "
+        $filter += ")"
+
+        $splatGetOrganizationRoles = @{
+            Uri     = "$($config.BaseUrl)/odata/OrganizationRole$($filter)"
+            Method  = 'GET'
+            Headers = $headers
+        }
+        $organizationRoles = (Invoke-RestMethod @splatGetOrganizationRoles -Verbose:$false).value
+
         $desiredPermissions = [System.Collections.Generic.List[Object]]::new()
         foreach ($contract in $contractsInScope) {
-            $desiredPermissionObject = @{
-                DisplayName = $contract.Title.Name
-                Id          = ($organizationRoles | Where-Object { $_.Name -eq $contract.Title.Name -and $_.DeparmentName -eq $contract.Department.displayname }).Id
+            # create organizationRoleObject without properties: freeFields and companyGroup because it is not required. value will automatically be set to null
+            $desiredPermissionObject = [PSCustomObject]@{
+                status               = "Assign"
+                displayname          = ($organizationRoles | Where-Object { $_.Name -eq $contract.Title.Name -and $_.DeparmentName -eq $contract.Department.displayname }).Name
+                startDate            = (Get-Date).ToString("yyyy-MM-ddTHH:mm:ssZ")
+                endDate              = (Get-Date "2099-12-31T23:59:59").ToString("yyyy-MM-ddTHH:mm:ssZ")
+                organizationRoleCode = ($organizationRoles | Where-Object { $_.Name -eq $contract.Title.Name -and $_.DeparmentName -eq $contract.Department.displayname }).Key
+                company              = $contract.Organization.Name
             }
             $desiredPermissions.Add($desiredPermissionObject)
         }
-    }
-    else {
+    } else { 
         $desiredPermissions = $null
     }
 
     # Built up the sub-permissions object
     if ($desiredPermissions) {
-        foreach ($permission in $desiredPermissions.GetEnumerator()) {
+        foreach ($permission in $desiredPermissions) {
             $subPermissions.Add([PSCustomObject]@{
-                    DisplayName = $permission.DisplayName
+                    DisplayName = $permission.displayName
                     Reference   = [PSCustomObject]@{
-                        Id = $permission.Id
+                        Id = $permission.organizationRoleCode
                     }
                 })
         }
 
         # Iterate through all desired permissions. If a desired permission is not found in the entitlementContext, add it to the 'permissionsToGrant' list.
-        foreach ($permission in $desiredPermissions.GetEnumerator()) {
+        foreach ($permission in $desiredPermissions) {
             if (-not $currentPermissions -or -not $currentPermissions.ContainsValue($permission.DisplayName)) {
                 $permissionsToGrant.Add($permission)
             }
         }
     }
 
-
     # Iterate through all current permissions. If a current permission is not found in the 'desiredPermissions' or if the
     # 'desiredPermissions' object is empty, add the permission to the 'permissionsToRevoke' list.
     if ($currentPermissions) {
-        foreach ($permission in $currentPermissions.GetEnumerator()) {
+        foreach ($permission in $currentPermissions) {
             if (-not $desiredPermissions.ContainsValue($permission.DisplayName)) {
                 $permissionsToRevoke.Add($permission)
-            }
-            elseif (-not $desiredPermissions) {
+            } elseif (-not $desiredPermissions) {
                 $permissionsToRevoke.Add($permission)
             }
         }
     }
 
+    $splatGetAuthorization = @{
+        Uri     = "$($config.BaseUrl)/authorizationrequest/Authorization/$($aRef)"
+        Method  = 'Get'
+        Headers = $headers
+    }
+    $authorization = Invoke-RestMethod @splatGetAuthorization -Verbose:$false
+
+    # This property needs to be false otherwise the user cannot get updated.
+    $authorization.deleteUser = $false
+    
     # Process results
     if (-not ($dryRun -eq $true)) {
-        $splatGetAuthorization = @{
-            Uri     = "$($config.BaseUrl)/authorizationrequest/Authorization/$($aRef)"
-            Method  = 'Get'
-            Headers = $headers
+        if ($permissionToRevoke) {
+            # Remove permissions from the authorization
+            foreach ($permission in $permissionsToRevoke) {
+                $permission.PSObject.Properties.Remove("displayname")
+                $authorization.organizationRoles -= $permission
+            }
+        } else {
+            Write-Verbose "No permissions to revoke"
+            $auditLogs.Add([PSCustomObject]@{
+                    Action  = "RevokePermission"
+                    Message = "No permissions to revoke"
+                    IsError = $false
+                })
         }
-        $authorization = Invoke-RestMethod @splatGetAuthorization -Verbose:$false        
 
-        # Add permissions to the authorization 
-        foreach ($permission in $permissionsToGrant.GetEnumerator()) {
-            $authorization.organizationRoles += $permission
-        }
-
-        # Remove permissions from the authorization
-        foreach ($permission in $permissionsToRevoke.GetEnumerator()) {
-            $authorization.organizationRoles -= $permission
+        if ($permissionsToGrant) {
+            # Add permissions to the authorization 
+            foreach ($permission in $permissionsToGrant) {
+                $permission.PSObject.Properties.Remove("displayname")
+                $authorization.organizationRoles += $permission 
+            }
+        } else {
+            Write-Verbose "No permissions to grant"
+            $auditLogs.Add([PSCustomObject]@{
+                    Action  = "GrantPermission"
+                    Message = "No permissions to grant"
+                    IsError = $false
+                })
         }
 
         #update authorization with the correct organizationRoles
         $splatUpdateAuthorization = @{
-            Uri     = "$($config.BaseUrl)/authorizationrequest/$($aRef)"
+            Uri     = "$($config.BaseUrl)/authorizationrequest/Authorization/$($aRef)"
             Method  = 'PATCH'
-            Body    = $authorization | convertTo-json
+            Body    = ($authorization | ConvertTo-Json -Depth 10)
             Headers = $headers
         }
         $null = Invoke-RestMethod @splatUpdateAuthorization -Verbose:$false
 
-
         # Add Logging when the update of the 
-        foreach ($permission in $permissionsToGrant.GetEnumerator()) {
+        foreach ($permission in $permissionsToGrant) {
             Write-Verbose "Granting demo entitlement: [$($permission.DisplayName)]"
             $auditLogs.Add([PSCustomObject]@{
                     Action  = "GrantPermission"
@@ -179,7 +207,7 @@ try {
                 })
         }
         
-        foreach ($permission in $permissionsToRevoke.GetEnumerator()) {          
+        foreach ($permission in $permissionsToRevoke) {          
             Write-Verbose "Revoking demo entitlement: [$($permission.DisplayName)]"
             $auditLogs.Add([PSCustomObject]@{
                     Action  = "RevokePermission"
@@ -189,8 +217,7 @@ try {
         }
         $success = $true
     }
-}
-catch {
+} catch {
     $success = $false
     $ex = $PSItem
     if ($($ex.Exception.GetType().FullName -eq 'Microsoft.PowerShell.Commands.HttpResponseException') -or
@@ -198,8 +225,7 @@ catch {
         $errorObj = Resolve-AuthorizationboxError -ErrorObject $ex
         $auditMessage = "Could not update Organization roles for account: [$($aRef)]. Error: $($errorObj.FriendlyMessage)"
         Write-Verbose "Error at Line '$($errorObj.ScriptLineNumber)': $($errorObj.Line). Error: $($errorObj.ErrorDetails)"
-    }
-    else {
+    } else {
         $auditMessage = "Could not update Organization roles for account: [$($aRef)]. Error: $($errorObj.FriendlyMessage)"
         Write-Verbose "Error at Line '$($ex.InvocationInfo.ScriptLineNumber)': $($ex.InvocationInfo.Line). Error: $($ex.Exception.Message)"
     }
@@ -207,8 +233,7 @@ catch {
             Message = $auditMessage
             IsError = $true
         })
-}
-finally {
+} finally {
     $result = [PSCustomObject]@{
         Success        = $success
         SubPermissions = $subPermissions
