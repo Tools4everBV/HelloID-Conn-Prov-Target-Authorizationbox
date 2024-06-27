@@ -1,181 +1,167 @@
-##################################################
+#################################################
 # HelloID-Conn-Prov-Target-Authorizationbox-Create
-#
-# Version: 1.0.0
-##################################################
-# Initialize default values
-$config = $configuration | ConvertFrom-Json
-$p = $person | ConvertFrom-Json
-$success = $false
-$updatePerson = $config.updatePersonOnCorrelate
-$auditLogs = [System.Collections.Generic.List[PSCustomObject]]::new()
-
-# Account mapping
-$account = [PSCustomObject]@{
-
-    userID       = $p.ExternalId
-    userName     = $p.UserName
-    sid          = $p.ExternalId
-    surname      = $p.Name.FamilyName
-    firstName    = $p.Name.GivenName
-    EmailAddress = $p.Accounts.MicrosoftActiveDirectory.mail
-}
+# PowerShell V2
+#################################################
 
 # Enable TLS1.2
 [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor [System.Net.SecurityProtocolType]::Tls12
 
-# Set debug logging
-switch ($($config.IsDebug)) {
-    $true { $VerbosePreference = 'Continue' }
-    $false { $VerbosePreference = 'SilentlyContinue' }
-}
+#$actionContext.DryRun = $false
 
 #region functions
 function Resolve-AuthorizationboxError {
+    [CmdletBinding()]
     param (
+        [Parameter(Mandatory)]
         [object]
         $ErrorObject
     )
-    {
+    process {
         $httpErrorObj = [PSCustomObject]@{
             ScriptLineNumber = $ErrorObject.InvocationInfo.ScriptLineNumber
             Line             = $ErrorObject.InvocationInfo.Line
             ErrorDetails     = $ErrorObject.Exception.Message
             FriendlyMessage  = $ErrorObject.Exception.Message
-        }       
-        if ($ErrorObject.ErrorDetails) {
-            $httpErrorObj.ErrorDetails = $ErrorObject.ErrorDetails
-            $httpErrorObj.FriendlyMessage = $ErrorObject.ErrorDetails
         }
-        
+        if (-not [string]::IsNullOrEmpty($ErrorObject.ErrorDetails.Message)) {
+            $httpErrorObj.ErrorDetails = $ErrorObject.ErrorDetails.Message
+        }
+        elseif ($ErrorObject.Exception.GetType().FullName -eq 'System.Net.WebException') {
+            if ($null -ne $ErrorObject.Exception.Response) {
+                $streamReaderResponse = [System.IO.StreamReader]::new($ErrorObject.Exception.Response.GetResponseStream()).ReadToEnd()
+                if (-not [string]::IsNullOrEmpty($streamReaderResponse)) {
+                    $httpErrorObj.ErrorDetails = $streamReaderResponse
+                }
+            }
+        }
         try {
-            $httpErrorObj.FriendlyMessage = ($httpErrorObj.FriendlyMessage | ConvertFrom-Json).error_description
+            $errorDetailsObject = ($httpErrorObj.ErrorDetails | ConvertFrom-Json)
+            # Make sure to inspect the error result object and add only the error message as a FriendlyMessage.
+            # $httpErrorObj.FriendlyMessage = $errorDetailsObject.message
+            $httpErrorObj.FriendlyMessage = $httpErrorObj.ErrorDetails # Temporarily assignment
         }
         catch {
-            # Displaying the old message if an error occurs during an API call, as the error is related to the API call and not the conversion process to JSON.
-            Write-Warning "Unexpected web-service response, Error during Json conversion: $($_.Exception.Message)"
+            $httpErrorObj.FriendlyMessage = $httpErrorObj.ErrorDetails
         }
         Write-Output $httpErrorObj
     }
 }
 #endregion
 
-# Begin
+# Initialize default values
+$config = $actionContext.Configuration
+$Account = $actionContext.Data
+
+$outputContext.success = $false
+
 try {
 
-    $tokenHeaders = @{
-        'Content-Type' = 'application/json'
-        Accept         = 'application/json;odata.metadata=minimal;odata.streaming=true'
-    }
-    $tokenBody = @{
-        'token'    = $config.token
-        'username' = $config.UserName
-    }
+    $s = New-PSSession -ComputerName  $actionContext.Configuration.Applicationserver
 
-    $splatGetToken = @{
-        Uri     = "$($config.BaseUrl)/api/Authenticate/AccessToken"
-        Method  = 'POST'
-        Body    = $tokenBody | ConvertTo-Json                                                                                                                                                                                                                                                                                                                            
-        Headers = $tokenHeaders
-    }
-    $accessToken = (Invoke-RestMethod @splatGetToken -Verbose:$false).token
-  
-    $headers = @{
-        'Content-Type' = 'application/json'
-        Accept         = 'application/json;odata.metadata=minimal;odata.streaming=true'
-        Authorization  = "Bearer $($accessToken)"
-    }
+    #Not sure how $Using: works with object properties
+    $EmailAddress = $actionContext.Data.EmailAddress
+    $SamAccountName = $actionContext.Data.Username
+    $DefaultCompany = $actionContext.Data.DefaultCompany
+    $UserPrincipalName = $actionContext.Data.userPrincipalName
+    $Displayname = $actionContext.Data.Displayname
 
-    $pageNumber = 0
-    $pageSize = 100
+    write-verbose -verbose ($actionContext | out-string)
 
-    do {
-        $pageNumber++
-        $splatGetAuthorization = @{
-            Uri     = "$($config.BaseUrl)/authorizationrequest/v2/Authorization?pageNumber=$($pageNumber)&pageSize=$($pageSize)"
-            Method  = 'GET'
-            Headers = $headers
-        }
-
-        $Authorizations = Invoke-RestMethod @splatGetAuthorization -Verbose:$false
-        $responseuser = $Authorizations.data | Where-Object { $_.databaseName -eq $config.Database -and $_.userValueSourcesModel.email -eq $account.EmailAddress }
-        write-verbose -verbose $pageNumber
-    } until (-not($null -eq $responseUser) -or $pageNumber -gt $Authorizations.totalPages)
+    $NavServerInstanceName = $actionContext.Configuration.NavServerInstanceName
+    $tenant = $actionContext.Configuration.Tenant
+    $LanguageID = $actionContext.Configuration.LanguageID
+    $Permissions = $actionContext.Configuration.Permissions
+    $PSModulePath = $actionContext.Configuration.PSModulePath
     
-    # Verify if a user must be either [created and correlated], [updated and correlated] or just [correlated]
-    if ($null -eq $responseUser) {
-        throw "User not found, create account in Empire"
+
+    #Make sure module is imported
+    Invoke-Command -Session $s -ScriptBlock { $ImportModule = Import-Module $using:PSModulePath -ErrorAction SilentlyContinue }
+    
+    # Initial Assignments
+    $outputContext.AccountReference = 'Currently not available'
+    
+    # Validate correlation configuration
+    if ($actionContext.CorrelationConfiguration.Enabled) {
+
+        # Verify if a user must be either [created ] or just [correlated]
+        $correlatedAccount = Invoke-Command -Session $s -ScriptBlock {Get-NAVServerUser -ServerInstance $using:NavServerInstanceName -Tenant $using:tenant | Where-Object {$_.UserName -eq $using:SamAccountName}} 
+
     }
 
-    if ($updatePerson -eq $true) {
-        $action = 'Update-Correlate'
+    if ($null -ne $correlatedAccount) {
+        $action = 'CorrelateAccount'
     }
     else {
-        $action = 'Correlate'
+        $action = 'CreateAccount'
+    } 
+
+    # Add a message and the result of each of the validations showing what will happen during enforcement
+    if ($actionContext.DryRun -eq $true) {
+        Write-Information "[DryRun] $action Authorizationbox account for: [$($personContext.Person.DisplayName)], will be executed during enforcement"
     }
 
-    # Add a warning message showing what will happen during enforcement
-    if ($dryRun -eq $true) {
-        Write-Warning "[DryRun] $action Authorizationbox account for: [$($p.DisplayName)], will be executed during enforcement"
-    }
-
+    
     # Process
-    if (-not($dryRun -eq $true)) {
+    if (-not($actionContext.DryRun -eq $true)) {
+
         switch ($action) {
-            'Update-Correlate' {
-                Write-Verbose 'Updating and correlating Authorizationbox account'
+            'CreateAccount' {
+                Write-Information 'Creating Nav User'
 
-                $splatUpdateAuthorization = @{
-                    Uri     = "$($config.BaseUrl)/authorizationrequest/Authorization/$($responseuser.code)"
-                    Method  = 'Patch'
-                    Body    = $account | ConvertTo-Json
-                    Headers = $headers
-                }
-                $null = Invoke-RestMethod @splatUpdateAuthorization -Verbose:$false
+                # Make sure to test with special characters and if needed; add utf8 encoding.
+                Invoke-Command -Session $s -ScriptBlock {$CreateNavUser = New-NAVServerUser -ServerInstance $using:NavServerInstanceName -Tenant $using:tenant -WindowsAccount $using:SamAccountName -FullName $using:DisplayName -AuthenticationEmail $using:UserPrincipalName -Company $using:DefaultCompany -LanguageID $using:LanguageID -ContactEmail $using:EmailAddress -ErrorAction SilentlyContinue -Verbose}
+                Invoke-Command -Session $s -ScriptBlock {$CreateNavUserPermission = New-NAVServerUserPermissionSet -ServerInstance $using:NavServerInstanceName -Tenant $using:tenant -WindowsAccount $using:SamAccountName -PermissionSetId $using:Permissions -ErrorAction SilentlyContinue -Verbose}
+            
+                $result = Invoke-Command -Session $s -ScriptBlock {Get-NAVServerUser -ServerInstance $using:NavServerInstanceName -Tenant $using:tenant | Where-Object {$_.UserName -eq 'WOCO\'+$using:SamAccountName}} 
+           
+                $outputContext.Data.SecurityID = $($result.UserSecurityID)
+                $outputContext.Data.DisplayName = $($result.Fullname)
+                $outputContext.Data.UserName = $($result.Username)
 
-                $accountReference = $responseUser.code
+                $outputContext.AccountReference = $($result.Username)
+                $auditLogMessage = "Create account was successful. AccountReference is: [$($outputContext.AccountReference)"
                 break
             }
 
-            'Correlate' {
-                Write-Verbose 'Correlating Authorizationbox account'
-                $accountReference = $responseUser.code
+            'CorrelateAccount' {
+                Write-Information 'Correlating Nav User'
+
+                $outputContext.Data.SecurityID = $($correlatedAccount.UserSecurityID)
+                $outputContext.Data.DisplayName = $($correlatedAccount.Fullname)
+                $outputContext.Data.UserName = $($correlatedAccount.Username)
+
+                $outputContext.AccountReference = $($correlatedAccount.Username)
+                $outputContext.AccountCorrelated = $true
+                $auditLogMessage = "Correlated account: [$($Account.UserName)]. AccountReference is: [$($outputContext.AccountReference)"
                 break
             }
         }
 
-        $success = $true
-        $auditLogs.Add([PSCustomObject]@{
-                Message = "$action account was successful. AccountReference is: [$($accountReference)]"
+        $outputContext.success = $true
+        $outputContext.AuditLogs.Add([PSCustomObject]@{
+                Action  = $action
+                Message = $auditLogMessage
                 IsError = $false
             })
     }
 }
+
 catch {
-    $success = $false
+    Exit-PSSession
+    $outputContext.success = $false
     $ex = $PSItem
     if ($($ex.Exception.GetType().FullName -eq 'Microsoft.PowerShell.Commands.HttpResponseException') -or
         $($ex.Exception.GetType().FullName -eq 'System.Net.WebException')) {
         $errorObj = Resolve-AuthorizationboxError -ErrorObject $ex
-        $auditMessage = "Could not $action Authorizationbox account. Error: $($errorObj.FriendlyMessage)"
-        Write-Verbose "Error at Line '$($errorObj.ScriptLineNumber)': $($errorObj.Line). Error: $($errorObj.ErrorDetails)"
+        $auditMessage = "Could not create or correlate Authorizationbox account. Error: $($errorObj.FriendlyMessage)"
+        Write-Warning "Error at Line '$($errorObj.ScriptLineNumber)': $($errorObj.Line). Error: $($errorObj.ErrorDetails)"
     }
     else {
-        $auditMessage = "Could not $action Authorizationbox account. Error: $($ex.Exception.Message)"
-        Write-Verbose "Error at Line '$($ex.InvocationInfo.ScriptLineNumber)': $($ex.InvocationInfo.Line). Error: $($ex.Exception.Message)"
+        $auditMessage = "Could not create or correlate Authorizationbox account. Error: $($ex.Exception.Message)"
+        Write-Warning "Error at Line '$($ex.InvocationInfo.ScriptLineNumber)': $($ex.InvocationInfo.Line). Error: $($ex.Exception.Message)"
     }
-    $auditLogs.Add([PSCustomObject]@{
+    $outputContext.AuditLogs.Add([PSCustomObject]@{
             Message = $auditMessage
             IsError = $true
         })
-    # End
-}
-finally {
-    $result = [PSCustomObject]@{
-        Success          = $success
-        AccountReference = $accountReference
-        Auditlogs        = $auditLogs
-        Account          = $account
-    }
-    Write-Output $result | ConvertTo-Json -Depth 10
 }
