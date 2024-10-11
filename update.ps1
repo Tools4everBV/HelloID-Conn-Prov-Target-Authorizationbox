@@ -64,10 +64,9 @@ try {
 
     $NavServerInstanceName = $actionContext.Configuration.NavServerInstanceName
     $tenant = $actionContext.Configuration.Tenant
-    $PSModulePath = $actionContext.Configuration.PSModulePath
     
     #Make sure module is imported
-    Invoke-Command -Session $s -ScriptBlock { $ImportModule = Import-Module $using:PSModulePath -ErrorAction SilentlyContinue }
+    Invoke-Command -Session $s -ScriptBlock { $ImportModule = Import-Module "D:\Program Files\Microsoft Dynamics 365 Business Central\Service\NavAdminTool.ps1" -ErrorAction SilentlyContinue }
 
 
     <#

@@ -48,10 +48,6 @@ function Resolve-AuthorizationboxError {
 }
 #endregion
 
-# Initialize default values
-$config = $actionContext.Configuration
-$Account = $actionContext.Data
-
 $outputContext.success = $false
 
 try {
@@ -64,25 +60,20 @@ try {
     $DefaultCompany = $actionContext.Data.DefaultCompany
     $UserPrincipalName = $actionContext.Data.userPrincipalName
     $Displayname = $actionContext.Data.Displayname
-
-    write-verbose -verbose ($actionContext | out-string)
-
     $NavServerInstanceName = $actionContext.Configuration.NavServerInstanceName
     $tenant = $actionContext.Configuration.Tenant
     $LanguageID = $actionContext.Configuration.LanguageID
     $Permissions = $actionContext.Configuration.Permissions
-    $PSModulePath = $actionContext.Configuration.PSModulePath
-    
 
-    #Make sure module is imported
-    Invoke-Command -Session $s -ScriptBlock { $ImportModule = Import-Module $using:PSModulePath -ErrorAction SilentlyContinue }
     
+    #Make sure module is imported
+    Invoke-Command -Session $s -ScriptBlock { $ImportModule = Import-Module "D:\Program Files\Microsoft Dynamics 365 Business Central\Service\NavAdminTool.ps1" -ErrorAction SilentlyContinue }
+
     # Initial Assignments
     $outputContext.AccountReference = 'Currently not available'
     
     # Validate correlation configuration
     if ($actionContext.CorrelationConfiguration.Enabled) {
-
         # Verify if a user must be either [created ] or just [correlated]
         $correlatedAccount = Invoke-Command -Session $s -ScriptBlock {Get-NAVServerUser -ServerInstance $using:NavServerInstanceName -Tenant $using:tenant | Where-Object {$_.UserName -eq $using:SamAccountName}} 
 
@@ -102,12 +93,11 @@ try {
 
     
     # Process
-    if (-not($actionContext.DryRun -eq $true)) {
-
         switch ($action) {
             'CreateAccount' {
                 Write-Information 'Creating Nav User'
 
+                if (-not($actionContext.DryRun -eq $true)) {
                 # Make sure to test with special characters and if needed; add utf8 encoding.
                 Invoke-Command -Session $s -ScriptBlock {$CreateNavUser = New-NAVServerUser -ServerInstance $using:NavServerInstanceName -Tenant $using:tenant -WindowsAccount $using:SamAccountName -FullName $using:DisplayName -AuthenticationEmail $using:UserPrincipalName -Company $using:DefaultCompany -LanguageID $using:LanguageID -ContactEmail $using:EmailAddress -ErrorAction SilentlyContinue -Verbose}
                 Invoke-Command -Session $s -ScriptBlock {$CreateNavUserPermission = New-NAVServerUserPermissionSet -ServerInstance $using:NavServerInstanceName -Tenant $using:tenant -WindowsAccount $using:SamAccountName -PermissionSetId $using:Permissions -ErrorAction SilentlyContinue -Verbose}
@@ -118,9 +108,11 @@ try {
                 $outputContext.Data.DisplayName = $($result.Fullname)
                 $outputContext.Data.UserName = $($result.Username)
 
-                $outputContext.AccountReference = $($result.Username)
                 $auditLogMessage = "Create account was successful. AccountReference is: [$($outputContext.AccountReference)"
                 break
+                } else {
+                    Write-Information 'Dryrun prevented this action' 
+                }
             }
 
             'CorrelateAccount' {
@@ -130,20 +122,27 @@ try {
                 $outputContext.Data.DisplayName = $($correlatedAccount.Fullname)
                 $outputContext.Data.UserName = $($correlatedAccount.Username)
 
-                $outputContext.AccountReference = $($correlatedAccount.Username)
                 $outputContext.AccountCorrelated = $true
-                $auditLogMessage = "Correlated account: [$($Account.UserName)]. AccountReference is: [$($outputContext.AccountReference)"
+                $auditLogMessage = "Correlated account: [$($actionContext.Data.Username)]. AccountReference is: [$($outputContext.AccountReference)"
                 break
             }
         }
 
+        $accountRef = [PSCustomObject]@{
+                    SecurityID = $outputContext.Data.SecurityID
+                    DisplayName = $outputContext.Data.DisplayName
+                    UserName     = $outputContext.Data.UserName
+        }
+
+        $outputContext.AccountReference = $accountRef
+                 
         $outputContext.success = $true
         $outputContext.AuditLogs.Add([PSCustomObject]@{
                 Action  = $action
                 Message = $auditLogMessage
                 IsError = $false
             })
-    }
+    
 }
 
 catch {

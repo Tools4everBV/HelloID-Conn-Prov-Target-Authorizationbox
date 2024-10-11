@@ -59,9 +59,8 @@ try {
 
     $NavServerInstanceName = $actionContext.Configuration.NavServerInstanceName
     $tenant = $actionContext.Configuration.Tenant
-    
     #Make sure module is imported
-    Invoke-Command -Session $s -ScriptBlock { $ImportModule = Import-Module $using:PSModulePath -ErrorAction SilentlyContinue }
+    Invoke-Command -Session $s -ScriptBlock { $ImportModule = Import-Module "D:\Program Files\Microsoft Dynamics 365 Business Central\Service\NavAdminTool.ps1" -ErrorAction SilentlyContinue }
 
 
     # Add a message and the result of each of the validations showing what will happen during enforcement
