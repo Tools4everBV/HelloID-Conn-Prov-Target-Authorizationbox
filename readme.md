@@ -52,7 +52,7 @@ The following settings are required to connect to the API.
 
 
 ### Remarks
-> This connector requires specific configuration. Requirements are as followed:
+This connector requires specific configuration. Requirements are as followed:
 Permissions can only be set through SubPermissions. Because Authorizationbox works with 'requests' that can be denied, HelloID must always check which permissions have been assigned to a user before setting up a request. Doing so, makes whatever is calculated by HelloID contracts 'the truth. Additional roles can not be set by hand, as these will appear in a 'remove' request every time the permissions is updated.
 
 Because Authorizationbox only accepts requests that can be denied or approved, HelloID can not set permissions through Business Rules. Monitoring requests status can not be done through HelloID and this will lead to mismatched.
