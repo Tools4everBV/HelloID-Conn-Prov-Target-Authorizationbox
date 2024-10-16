@@ -48,20 +48,25 @@ The following settings are required to connect to the API.
 | Token        | The Token to connect to the API         | Yes         |
 | Database     | The Database where the users are stored | Yes         |
 | BaseUrl      | The URL to the API                      | Yes         |
+| Application server information | Information containing information about the applicationserver such as instance name, powershell module path, but also dynamics tentant, permissions and languageID | Yes         | 
 
 
 ### Remarks
-> The connector does not execute a 'create' request when the user does not exist. Instead, you need to create the user in Empire.
+> This connector requires specific configuration. Requirements are as followed:
+> Permissions can only be set through SubPermissions. Because Authorizationbox works with 'requests' that can be denied, HelloID must always check which permissions have been assigned to a user before setting up a request. Doing so, makes whatever is calculated by HelloID contracts 'the truth. Additional roles can not be set by hand, as these will appear in a 'remove' request every time the permissions is updated.
+> Because Authorizationbox only accepts requests that can be denied or approved, HelloID can not set permissions through Business Rules. Monitoring requests status can not be done through HelloID and this will lead to mismatched.
+> Only 1 request can be open at any time. There is example code added for updating authorization requests, but this does not work. Instead, we delete the old request and build a new one.
+> Organizational Units must be named exactly as in the source system
+> Functions must be named exactly as in the source system
+> If a combination can not be found, this connector will generate an error
 
-> The connector uses dynamic permissions (subpermissions). Create a static permission to grant the entitlements.
 
-> During the development of the connector, we made the assumption that the entire organization role array needs to be sent when updating an authorization in the entitlement.ps1.
 
 #### Creation / correlation process
 
-A new functionality is the possibility to update the account in the target system during the correlation process. By default, this behavior is disabled. Meaning, the account will only be created or correlated.
+Users will currently not be created in AuthorizationBox. Instead this script creates or correlates a user account in Microsoft Dynamics 365 Business Central. It checks if the user already exists (correlates) or creates a new user, configuring necessary attributes like username, email, and permissions. Currently we do not compare the user, and will always update when a user is correlated.
 
-You can change this behavior in the configuration by setting the toggle for `$updatePersonOnCorrelate` to checked.
+This connector users the nav-tools powershell scripts that Business Central supplies.
 
 > Be aware that this might have unexpected implications.
 
