@@ -53,12 +53,17 @@ The following settings are required to connect to the API.
 
 ### Remarks
 > This connector requires specific configuration. Requirements are as followed:
-> Permissions can only be set through SubPermissions. Because Authorizationbox works with 'requests' that can be denied, HelloID must always check which permissions have been assigned to a user before setting up a request. Doing so, makes whatever is calculated by HelloID contracts 'the truth. Additional roles can not be set by hand, as these will appear in a 'remove' request every time the permissions is updated.
-> Because Authorizationbox only accepts requests that can be denied or approved, HelloID can not set permissions through Business Rules. Monitoring requests status can not be done through HelloID and this will lead to mismatched.
-> Only 1 request can be open at any time. There is example code added for updating authorization requests, but this does not work. Instead, we delete the old request and build a new one.
-> Organizational Units must be named exactly as in the source system
-> Functions must be named exactly as in the source system
-> If a combination can not be found, this connector will generate an error
+Permissions can only be set through SubPermissions. Because Authorizationbox works with 'requests' that can be denied, HelloID must always check which permissions have been assigned to a user before setting up a request. Doing so, makes whatever is calculated by HelloID contracts 'the truth. Additional roles can not be set by hand, as these will appear in a 'remove' request every time the permissions is updated.
+
+Because Authorizationbox only accepts requests that can be denied or approved, HelloID can not set permissions through Business Rules. Monitoring requests status can not be done through HelloID and this will lead to mismatched.
+
+Only 1 request can be open at any time. There is example code added for updating authorization requests, but this does not work. Instead, we delete the old request and build a new one.
+
+Organizational Units must be named exactly as in the source system
+
+Functions must be named exactly as in the source system
+
+If a combination can not be found, this connector will generate an error
 
 
 
