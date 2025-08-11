@@ -6,9 +6,6 @@
 # Enable TLS1.2
 [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor [System.Net.SecurityProtocolType]::Tls12
 
-#$actionContext.DryRun = $false
-
-#region functions
 function Resolve-AuthorizationboxError {
     [CmdletBinding()]
     param (
@@ -46,44 +43,94 @@ function Resolve-AuthorizationboxError {
         Write-Output $httpErrorObj
     }
 }
+
+function Remove-StringLatinCharacters {
+    PARAM ([string]$String)
+    [Text.Encoding]::ASCII.GetString([Text.Encoding]::GetEncoding("Cyrillic").GetBytes($String))
+}
+
+function Get-AccessToken {
+    [CmdletBinding()]
+    param ()
+    try {
+        $tokenHeaders = @{
+            'Content-Type' = 'application/json'
+            Accept         = 'application/json;odata.metadata=minimal;odata.streaming=true'
+        }
+    
+        $tokenBody = @{
+            'token'    = $actionContext.Configuration.token
+            'username' = $actionContext.Configuration.UserName
+        }
+    
+        $splatGetToken = @{
+            Uri     = "$($actionContext.Configuration.BaseUrl)/api/v3.0/Authenticate/AccessToken"
+            Method  = 'POST'
+            Body    = $tokenBody | ConvertTo-Json
+            Headers = $tokenHeaders
+        }
+
+        $accessToken = (Invoke-RestMethod @splatGetToken -Verbose:$false).token
+        Write-Output $accessToken
+    }
+    catch {
+        $PSCmdlet.ThrowTerminatingError($_)
+    }
+}
+
 #endregion
 
-$outputContext.success = $false
-
 try {
-
-    $s = New-PSSession -ComputerName  $actionContext.Configuration.Applicationserver
-
-    #Not sure how $Using: works with object properties
-    $EmailAddress = $actionContext.Data.EmailAddress
-    $SamAccountName = $actionContext.Data.Username
-    $DefaultCompany = $actionContext.Data.DefaultCompany
-    $UserPrincipalName = $actionContext.Data.userPrincipalName
-    $Displayname = $actionContext.Data.Displayname
-    $NavServerInstanceName = $actionContext.Configuration.NavServerInstanceName
-    $tenant = $actionContext.Configuration.Tenant
-    $LanguageID = $actionContext.Configuration.LanguageID
-    $Permissions = $actionContext.Configuration.Permissions
-
+    Write-Verbose 'Getting Access Token' -Verbose
+    $accessToken = Get-AccessToken
+        
+    $headers = @{
+        'Content-Type' = 'application/json'
+        Accept         = 'application/json;odata.metadata=minimal;odata.streaming=true'
+        Authorization  = "Bearer $($accessToken)"
+    }
     
-    #Make sure module is imported
-    Invoke-Command -Session $s -ScriptBlock { $ImportModule = Import-Module "D:\Program Files\Microsoft Dynamics 365 Business Central\Service\NavAdminTool.ps1" -ErrorAction SilentlyContinue }
-
     # Initial Assignments
     $outputContext.AccountReference = 'Currently not available'
     
+    # Define correlation
+    $correlationField = $actionContext.CorrelationConfiguration.accountField
+    $correlationValue = $actionContext.CorrelationConfiguration.accountFieldValue
+
+    #Write-Information "$correlationField - $correlationValue"
+
+    # In V3 we need to convert the database name to a database ID
+    $splatGetDatabase = @{
+        Uri     = "$($actionContext.Configuration.BaseUrl)/api/v2.0/Database"
+        Method  = 'GET'
+        Headers = $headers
+    }
+    $DatabaseList = (Invoke-RestMethod @splatGetDatabase -Verbose:$false) | Group-Object name -AsHashTable    
+    $DatabaseID = $DatabaseList[$($actionContext.Configuration.Database)].id
+
     # Validate correlation configuration
     if ($actionContext.CorrelationConfiguration.Enabled) {
-        # Verify if a user must be either [created ] or just [correlated]
-        $correlatedAccount = Invoke-Command -Session $s -ScriptBlock {Get-NAVServerUser -ServerInstance $using:NavServerInstanceName -Tenant $using:tenant | Where-Object {$_.UserName -eq $using:SamAccountName}} 
-
+        
+        #Get user (If no results are returned, try getting users without the filter)
+        $filter = "?`$filter=(databaseId eq $DatabaseID and $correlationField eq $correlationValue)"
+        
+        $splatGetUsers = @{
+            Uri     = "$($actionContext.Configuration.BaseUrl)/odata/v2.0/Users$($filter)"
+            Method  = 'GET'
+            Headers = $headers
+        }
+    
+        $User = (Invoke-RestMethod @splatGetUsers -Verbose:$false).value
+    }
+    else {
+        Write-Error "Correlation is required, please configure this in the connector"
     }
 
-    if ($null -ne $correlatedAccount) {
+    if ($User) {
         $action = 'CorrelateAccount'
     }
     else {
-        $action = 'CreateAccount'
+        $action = 'Not Found'
     } 
 
     # Add a message and the result of each of the validations showing what will happen during enforcement
@@ -91,62 +138,119 @@ try {
         Write-Information "[DryRun] $action Authorizationbox account for: [$($personContext.Person.DisplayName)], will be executed during enforcement"
     }
 
-    
-    # Process
-        switch ($action) {
-            'CreateAccount' {
-                Write-Information 'Creating Nav User'
-
-                if (-not($actionContext.DryRun -eq $true)) {
-                # Make sure to test with special characters and if needed; add utf8 encoding.
-                Invoke-Command -Session $s -ScriptBlock {$CreateNavUser = New-NAVServerUser -ServerInstance $using:NavServerInstanceName -Tenant $using:tenant -WindowsAccount $using:SamAccountName -FullName $using:DisplayName -AuthenticationEmail $using:UserPrincipalName -Company $using:DefaultCompany -LanguageID $using:LanguageID -ContactEmail $using:EmailAddress -ErrorAction SilentlyContinue -Verbose}
-                Invoke-Command -Session $s -ScriptBlock {$CreateNavUserPermission = New-NAVServerUserPermissionSet -ServerInstance $using:NavServerInstanceName -Tenant $using:tenant -WindowsAccount $using:SamAccountName -PermissionSetId $using:Permissions -ErrorAction SilentlyContinue -Verbose}
+    switch ($action) {
+        'Not Found' {
             
-                $result = Invoke-Command -Session $s -ScriptBlock {Get-NAVServerUser -ServerInstance $using:NavServerInstanceName -Tenant $using:tenant | Where-Object {$_.UserName -eq 'WOCO\'+$using:SamAccountName}} 
-           
-                $outputContext.Data.SecurityID = $($result.UserSecurityID)
-                $outputContext.Data.DisplayName = $($result.Fullname)
-                $outputContext.Data.UserName = $($result.Username)
+            Write-Information 'User not found in Authorizationbox, trying to send in empty authorization request & retry correlate'
 
-                $auditLogMessage = "Create account was successful. AccountReference is: [$($outputContext.AccountReference)"
-                break
-                } else {
-                    Write-Information 'Dryrun prevented this action' 
+            if (-not($actionContext.DryRun -eq $true)) {
+
+
+                $authorization = [PSCustomObject]@{
+                    securityId   = $actionContext.data.userSecurityId
+                    databaseId   = $DatabaseID
                 }
+
+                # Create Authorization
+                $excludedFields = @("userSecurityId")
+
+                $userValueData = $actionContext.Data | Get-Member -MemberType NoteProperty | Where-Object {
+                    $excludedFields -notcontains $_.Name
+                } | ForEach-Object {
+                    @{ Name = $_.Name; Value = $actionContext.Data.($_.Name) }
+                }
+
+                $userValueSourcesModel = [PSCustomObject]@{}
+                foreach ($item in $userValueData) {
+                    $userValueSourcesModel | Add-Member -NotePropertyName $item.Name -NotePropertyValue $item.Value
+                }
+                $authorization | Add-Member -NotePropertyName "userValueSourcesModel" -NotePropertyValue $userValueSourcesModel
+
+                #Send Auth request
+                $splatSendAuthorization = @{
+                    Uri     = "$($actionContext.Configuration.BaseUrl)/authorizationrequest/V3/Authorization"
+                    Method  = 'POST'
+                    Body    = ($authorization | ConvertTo-Json -Depth 10)
+                    Headers = $headers
+                } 
+
+                $null = Invoke-RestMethod @splatSendAuthorization -Verbose:$false
+                
+                #If this doesnt return an error, correlate user again
+                $filter = "?`$filter=(databaseId eq $databaseid and $correlationField eq $correlationValue)"
+        
+                $splatGetUsers = @{
+                    Uri     = "$($actionContext.Configuration.BaseUrl)/odata/v2.0/Users$($filter)"
+                    Method  = 'GET'
+                    Headers = $headers
+                }
+            
+                $User = (Invoke-RestMethod @splatGetUsers -Verbose:$false).value | Select-Object -First 1
+
+                if ($null -ne $User) {
+                    $outputContext.Data.userSecurityID = $($User.userSecurityID)
+                    $outputContext.Data.fullName = $($User.fullName)
+                    $outputContext.Data.userName = $($User.userName)
+
+                    $accountRef = [PSCustomObject]@{
+                        userSecurityId  = $outputContext.Data.userSecurityId
+                        fullName = $outputContext.Data.fullName
+                        userName    = $outputContext.Data.userName
+                    }
+
+                    $outputContext.AccountCorrelated = $false
+                    $outputContext.AccountReference = $accountRef
+                    $outputContext.success = $true
+
+                    $outputContext.AuditLogs.Add([PSCustomObject]@{
+                            Action  = 'CorrelateAccount'
+                            Message = "Correlated account by creating first authorization request for: [$($actionContext.Data.Username)]. AccountReference is: [$($outputContext.AccountReference)]"
+                            IsError = $false
+                        })
+                }
+                else {
+                    $outputContext.AuditLogs.Add([PSCustomObject]@{
+                            Action  = 'CorrelateAccount'
+                            Message = "Correlate account was unsuccessful. User has not been found in Authorizationbox"
+                            IsError = $true
+                        })
+                } 
+
             }
-
-            'CorrelateAccount' {
-                Write-Information 'Correlating Nav User'
-
-                $outputContext.Data.SecurityID = $($correlatedAccount.UserSecurityID)
-                $outputContext.Data.DisplayName = $($correlatedAccount.Fullname)
-                $outputContext.Data.UserName = $($correlatedAccount.Username)
-
-                $outputContext.AccountCorrelated = $true
-                $auditLogMessage = "Correlated account: [$($actionContext.Data.Username)]. AccountReference is: [$($outputContext.AccountReference)"
-                break
+            else {
+                Write-Information 'Dryrun prevented this action'
             }
+            break
         }
 
-        $accountRef = [PSCustomObject]@{
-                    SecurityID = $outputContext.Data.SecurityID
-                    DisplayName = $outputContext.Data.DisplayName
-                    UserName     = $outputContext.Data.UserName
-        }
+        'CorrelateAccount' {
+            Write-Information 'Correlating Authorizationbox User'
 
-        $outputContext.AccountReference = $accountRef
-                 
-        $outputContext.success = $true
-        $outputContext.AuditLogs.Add([PSCustomObject]@{
-                Action  = $action
-                Message = $auditLogMessage
-                IsError = $false
-            })
-    
-}
+            $outputContext.Data.userSecurityID = $($User.userSecurityID)
+            $outputContext.Data.fullName = $($User.fullName)
+            $outputContext.Data.userName = $($User.userName)
+
+            $accountRef = [PSCustomObject]@{
+                userSecurityId  = $outputContext.Data.userSecurityId
+                fullName = $outputContext.Data.fullName
+                userName    = $outputContext.Data.userName
+            }
+
+            $outputContext.AccountCorrelated = $true
+            $outputContext.AccountReference = $accountRef
+            $outputContext.success = $true
+
+            $outputContext.AuditLogs.Add([PSCustomObject]@{
+                    Action  = 'CorrelateAccount'
+                    Message = "Correlated account: [$($actionContext.Data.Username)]. AccountReference is: [$($outputContext.AccountReference)]"
+                    IsError = $false
+                })
+            break       
+        }  
+    }  
+} 
 
 catch {
-    Exit-PSSession
     $outputContext.success = $false
     $ex = $PSItem
     if ($($ex.Exception.GetType().FullName -eq 'Microsoft.PowerShell.Commands.HttpResponseException') -or

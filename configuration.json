@@ -1,123 +1,53 @@
 [
-    {
-      "key": "UserName",
-      "type": "input",
-      "defaultValue": "",
-      "templateOptions": {
-        "label": "2Control UserName",
-        "description": "The UserName to connect to the API",
-        "required": true
-      }
+  {
+    "defaultValue": "",
+    "key": "UserName",
+    "templateOptions": {
+      "description": "The UserName to connect to the API",
+      "label": "2Control UserName",
+      "required": true
     },
-    {
-      "key": "Token",
-      "type": "input",
-      "defaultValue": "",
-      "templateOptions": {
-        "type": "password",
-        "label": "2Control Password",
-        "description": "The password to connect to the API",
-        "required": true
-      }
+    "type": "input"
+  },
+  {
+    "defaultValue": "",
+    "key": "Token",
+    "templateOptions": {
+      "description": "The password to connect to the API",
+      "label": "2Control Password",
+      "required": true,
+      "type": "password"
     },
-    {
-      "key": "BaseUrl",
-      "type": "input",
-      "defaultValue": "",
-      "templateOptions": {
-        "label": "2Control BaseUrl",
-        "description": "The URL to the API.",
-        "required": true
-      }
+    "type": "input"
+  },
+  {
+    "defaultValue": "https://api.2-controlware.com",
+    "key": "BaseUrl",
+    "templateOptions": {
+      "description": "The URL to the API.",
+      "label": "2Control BaseUrl",
+      "required": true
     },
-    {
-      "key": "Database",
-      "type": "input",
-      "defaultValue": "",
-      "templateOptions": {
-        "label": "Database",
-        "description": "The name of the database.",
-        "required": true
-      }
+    "type": "input"
+  },
+  {
+    "defaultValue": "",
+    "key": "Database",
+    "templateOptions": {
+      "description": "The name of the database.",
+      "label": "Database",
+      "required": true
     },
-    {
-      "key": "Applicationserver",
-      "type": "input",
-      "defaultValue": "",
-      "templateOptions": {
-        "label": "Applicationserver",
-        "description": "Server containing NAV module",
-        "required": true
-      }
+    "type": "input"
+  },
+  {
+    "defaultValue": true,
+    "key": "IsDebug",
+    "templateOptions": {
+      "description": "When toggled, debug logging will be displayed",
+      "label": "Toggle debug logging",
+      "required": false
     },
-    {
-      "key": "PSModulePath",
-      "type": "input",
-      "defaultValue": "",
-      "templateOptions": {
-        "label": "Powershell module path",
-        "description": "",
-        "required": true
-      }
-    },
-    {
-      "key": "NavServerInstanceName",
-      "type": "input",
-      "defaultValue": "",
-      "templateOptions": {
-        "label": "NavServer Instance Name",
-        "description": "NavServer Instance Name",
-        "required": true
-      }
-    },
-    {
-      "key": "Tenant",
-      "type": "input",
-      "defaultValue": "",
-      "templateOptions": {
-        "label": "Tenant",
-        "description": "Tenant",
-        "required": true
-      }
-    },
-    {
-      "key": "Permissions",
-      "type": "input",
-      "defaultValue": "",
-      "templateOptions": {
-        "label": "Permissions",
-        "description": "Permissions",
-        "required": true
-      }
-    },
-    {
-      "key": "LanguageID",
-      "type": "input",
-      "defaultValue": "",
-      "templateOptions": {
-        "label": "Language ID",
-        "description": "LanguageID",
-        "required": true
-      }
-    },
-    {
-      "key": "updatePersonOnCorrelate",
-      "type": "checkbox",
-      "defaultValue": false,
-      "templateOptions": {
-        "label": "Update Person when correlating",
-        "required": false,
-        "description": "This will update Authorizationbox persons in the create action (not just correlate)."
-      }
-    },
-    {
-      "key": "IsDebug",
-      "type": "checkbox",
-      "defaultValue": true,
-      "templateOptions": {
-        "label": "Toggle debug logging",
-        "description": "When toggled, debug logging will be displayed",
-        "required": false
-      }
-    }
-  ]
+    "type": "checkbox"
+  }
+]

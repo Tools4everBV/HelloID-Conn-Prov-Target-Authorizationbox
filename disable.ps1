@@ -1,5 +1,5 @@
 #################################################
-# HelloID-Conn-Prov-Target-Authorizationbox-Delete
+# HelloID-Conn-Prov-Target-Authorizationbox-Disable
 # PowerShell V2
 #################################################
 
@@ -114,12 +114,11 @@ try {
         Method  = 'GET'
         Headers = $headers
     }
-    
-    #$correlatedAccount = (Invoke-RestMethod @splatGetUsers -Verbose:$false).value
+
     $correlatedAccount = (Invoke-RestMethod @splatGetUsers -Verbose:$false).value | Select-Object -First 1
 
     if ($null -ne $correlatedAccount) {
-        $action = 'DeleteAccount'
+        $action = 'DisableAccount'
     }
     else {
         $action = 'NotFound'
@@ -127,16 +126,16 @@ try {
 
     # Process
     switch ($action) {
-        'DeleteAccount' {
+        'DisableAccount' {
             $authorization = [PSCustomObject]@{
                 securityId   = $actionContext.data.userSecurityId
                 databaseId   = $DatabaseID
-                activateUser = $false
+                activateUser = $false   #Can be toggleed
                 organizationRoles     = @()
             }
 
             # Create Authorization
-            $excludedFields = @("userSecurityId")
+            $excludedFields = @("userSecurityId", "DisabledRoles")
 
             $userValueData = $actionContext.Data | Get-Member -MemberType NoteProperty | Where-Object {
                 $excludedFields -notcontains $_.Name
@@ -150,7 +149,7 @@ try {
             }
             $authorization | Add-Member -NotePropertyName "userValueSourcesModel" -NotePropertyValue $userValueSourcesModel
 
-            <# Delete all roles - Example
+            <# Delete all roles except roles defined in disabled roles - Example
             $splatGetRoles = @{
                 Uri     = "$($actionContext.Configuration.BaseUrl)" + "/odata/v2.0/OrgRolesPerUser?`$filter=(databaseId eq $DatabaseID and userCode eq $($correlatedAccount.key))"    
                 Method  = 'GET'
@@ -172,6 +171,9 @@ try {
             }  
 
             foreach ($permission in $currentPermissions) {
+                write-verbose -verbose ($permission | out-string)
+
+                if (-not ($actionContext.data.DisabledRoles -contains "$($permission.displayname)")) {
                     $RemovePermissionObject = @{
                         status               = "Revoke"
                         displayname          = $permission.displayname
@@ -182,7 +184,9 @@ try {
                     }
 
                     $authorization.organizationRoles += $RemovePermissionObject
+                } 
             }
+
             #>
 
             #Send Auth request
@@ -193,20 +197,19 @@ try {
                 Headers = $headers
             } 
 
-
             # Make sure to test with special characters and if needed; add utf8 encoding.
             if (-not($actionContext.DryRun -eq $true)) {
-                Write-Information "Delete AuthorizationBox account with accountReference: [$($actionContext.References.Account.userSecurityId)]"
+                Write-Information "Disable AuthorizationBox account with accountReference: [$($actionContext.References.Account.userSecurityId)]"
                 $null = Invoke-RestMethod @splatSendAuthorization -Verbose:$false
             }
             else {
-                Write-Information "[DryRun] Delete AuthorizationBox account with accountReference: [$($actionContext.References.Account.userSecurityId)], will be executed during enforcement"
+                Write-Information "[DryRun] Disable AuthorizationBox account with accountReference: [$($actionContext.References.Account.userSecurityId)], will be executed during enforcement"
             }
 
             # Make sure to filter out arrays from $outputContext.Data (If this is not mapped to type Array in the fieldmapping). This is not supported by HelloID.
             $outputContext.Success = $true
             $outputContext.AuditLogs.Add([PSCustomObject]@{
-                    Message = "Delete account was successful"
+                    Message = "Disable account was successful"
                     IsError = $false
                 }
             )
@@ -214,12 +217,13 @@ try {
             break
         }
 
+
         'NotFound' {
             Write-Information "AuthorizationBox account with userSecurityId [$($actionContext.References.Account.userSecurityId)] in database [$DatabaseID] not found. It may not exist or was deleted."            
             $outputContext.Success = $false
             $outputContext.AuditLogs.Add([PSCustomObject]@{
                     Message = "AuthorizationBox account with userSecurityId [$($actionContext.References.Account.userSecurityId)] in database [$DatabaseID] not found. It may not exist or was deleted."
-                    IsError = $false
+                    IsError = $true
                 })
             break
         }
@@ -231,11 +235,11 @@ catch {
     if ($($ex.Exception.GetType().FullName -eq 'Microsoft.PowerShell.Commands.HttpResponseException') -or
         $($ex.Exception.GetType().FullName -eq 'System.Net.WebException')) {
         $errorObj = Resolve-AuthorizationboxError -ErrorObject $ex
-        $auditMessage = "Could not delete Authorizationbox account. Error: $($errorObj.FriendlyMessage)"
+        $auditMessage = "Could not disable Authorizationbox account. Error: $($errorObj.FriendlyMessage)"
         Write-Warning "Error at Line '$($errorObj.ScriptLineNumber)': $($errorObj.Line). Error: $($errorObj.ErrorDetails)"
     }
     else {
-        $auditMessage = "Could not delete Authorizationbox account. Error: $($ex.Exception.Message)"
+        $auditMessage = "Could not disable Authorizationbox account. Error: $($ex.Exception.Message)"
         Write-Warning "Error at Line '$($ex.InvocationInfo.ScriptLineNumber)': $($ex.InvocationInfo.Line). Error: $($ex.Exception.Message)"
     }
     $outputContext.AuditLogs.Add([PSCustomObject]@{

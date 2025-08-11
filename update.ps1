@@ -3,10 +3,11 @@
 # PowerShell V2
 #################################################
 
-#$actionContext.DryRun = $false
-
 # Enable TLS1.2
 [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor [System.Net.SecurityProtocolType]::Tls12
+
+#Used for when using a full update.
+#$AlwaysSendAutorisationRequest = $true
 
 #region functions
 function Resolve-AuthorizationboxError {
@@ -25,7 +26,8 @@ function Resolve-AuthorizationboxError {
         }
         if (-not [string]::IsNullOrEmpty($ErrorObject.ErrorDetails.Message)) {
             $httpErrorObj.ErrorDetails = $ErrorObject.ErrorDetails.Message
-        } elseif ($ErrorObject.Exception.GetType().FullName -eq 'System.Net.WebException') {
+        }
+        elseif ($ErrorObject.Exception.GetType().FullName -eq 'System.Net.WebException') {
             if ($null -ne $ErrorObject.Exception.Response) {
                 $streamReaderResponse = [System.IO.StreamReader]::new($ErrorObject.Exception.Response.GetResponseStream()).ReadToEnd()
                 if (-not [string]::IsNullOrEmpty($streamReaderResponse)) {
@@ -38,101 +40,206 @@ function Resolve-AuthorizationboxError {
             # Make sure to inspect the error result object and add only the error message as a FriendlyMessage.
             # $httpErrorObj.FriendlyMessage = $errorDetailsObject.message
             $httpErrorObj.FriendlyMessage = $httpErrorObj.ErrorDetails # Temporarily assignment
-        } catch {
+        }
+        catch {
             $httpErrorObj.FriendlyMessage = $httpErrorObj.ErrorDetails
         }
         Write-Output $httpErrorObj
     }
 }
+
+function Remove-StringLatinCharacters {
+    PARAM ([string]$String)
+    [Text.Encoding]::ASCII.GetString([Text.Encoding]::GetEncoding("Cyrillic").GetBytes($String))
+}
+
+function Get-AccessToken {
+    [CmdletBinding()]
+    param ()
+    try {
+        $tokenHeaders = @{
+            'Content-Type' = 'application/json'
+            Accept         = 'application/json;odata.metadata=minimal;odata.streaming=true'
+        }
+    
+        $tokenBody = @{
+            'token'    = $actionContext.Configuration.token
+            'username' = $actionContext.Configuration.UserName
+        }
+    
+        $splatGetToken = @{
+            Uri     = "$($actionContext.Configuration.BaseUrl)/api/V3.0/Authenticate/AccessToken"
+            Method  = 'POST'
+            Body    = $tokenBody | ConvertTo-Json
+            Headers = $tokenHeaders
+        }
+        $accessToken = (Invoke-RestMethod @splatGetToken -Verbose:$false).token
+        Write-Output $accessToken
+    }
+    catch {
+        $PSCmdlet.ThrowTerminatingError($_)
+    }
+}
+
 #endregion
 
 try {
     # Verify if [aRef] has a value
     if ([string]::IsNullOrEmpty($($actionContext.References.Account))) {
-        #throw 'The account reference could not be found'
+        throw 'The account reference could not be found'
     }
 
-    $s = New-PSSession -ComputerName  $actionContext.Configuration.Applicationserver
-   
-    #Not sure how $Using: works with object properties
-    $SamAccountName = $actionContext.Data.Username
-    $Displayname = $actionContext.Data.DisplayName
-    $UserPrincipalName = $actionContext.Data.userPrincipalName
-    $DefaultCompany = $actionContext.Data.DefaultCompany
-    $EmailAddress = $actionContext.Data.EmailAddress
-    $LanguageID = $actionContext.Configuration.LanguageID
+    Write-Verbose 'Getting Access Token' -Verbose
+    $accessToken = Get-AccessToken
+        
+    $headers = @{
+        'Content-Type' = 'application/json'
+        Accept         = 'application/json;odata.metadata=minimal;odata.streaming=true'
+        Authorization  = "Bearer $($accessToken)"
+    }
 
-    $NavServerInstanceName = $actionContext.Configuration.NavServerInstanceName
-    $tenant = $actionContext.Configuration.Tenant
+    # In V3 we need to convert the database name to a database ID
+    $splatGetDatabase = @{
+        Uri     = "$($actionContext.Configuration.BaseUrl)/api/v2.0/Database"
+        Method  = 'GET'
+        Headers = $headers
+    }
+    $DatabaseList = (Invoke-RestMethod @splatGetDatabase -Verbose:$false) | Group-Object name -AsHashTable    
+    $DatabaseID = $DatabaseList[$($actionContext.Configuration.Database)].id
+
+    # Check if account exists
+    Write-Information 'Verifying if an Authorizationbox account exists'
+
+    $filter = "?`$filter=(databaseId eq $DatabaseID and userSecurityId eq $($actionContext.References.Account.userSecurityId))"
     
-    #Make sure module is imported
-    Invoke-Command -Session $s -ScriptBlock { $ImportModule = Import-Module "D:\Program Files\Microsoft Dynamics 365 Business Central\Service\NavAdminTool.ps1" -ErrorAction SilentlyContinue }
+    $splatGetUsers = @{
+        Uri     = "$($actionContext.Configuration.BaseUrl)/odata/v2.0/Users$($filter)"
+        Method  = 'GET'
+        Headers = $headers
+    }
+    
+    #$correlatedAccount = (Invoke-RestMethod @splatGetUsers -Verbose:$false).value
+    $correlatedAccount = (Invoke-RestMethod @splatGetUsers -Verbose:$false).value | Select-Object -First 1
 
-
-    <#
-    Write-Information "Verifying if a Authorizationbox account for [$($personContext.Person.DisplayName)] exists"
-    $correlatedAccount = 'userInfo'
-    $outputContext.PreviousData = $correlatedAccount
-
-    # Always compare the account against the current account in target system
     if ($null -ne $correlatedAccount) {
-        $splatCompareProperties = @{
-            ReferenceObject  = @($correlatedAccount.PSObject.Properties)
-            DifferenceObject = @($actionContext.Data.PSObject.Properties)
-        }  
-        $propertiesChanged = Compare-Object @splatCompareProperties -PassThru | Where-Object { $_.SideIndicator -eq '=>' }
-        if ($propertiesChanged) {
-            $action = 'UpdateAccount'
-            $dryRunMessage = "Account property(s) required to update: $($propertiesChanged.Name -join ', ')"
-        } else {
+        $action = 'NoChanges'
+        
+        #Custom compare, we cant do a Get on the fields we need
+        $outputContext.AuditLogs.Add([PSCustomObject]@{
+                    Message = "Previous: $($personContext.PreviousPerson.PrimaryContract.Custom.ABAdministratie) + Current: $($personContext.Person.PrimaryContract.Custom.ABAdministratie)"
+                    IsError = $false
+        })
+
+
+        #This is has to be declared manually, because we can not do a get user with all values. See example below:
+
+        <# Example: If department is changed, set action.
+        if($personContext.PreviousPerson.PrimaryContract.Department.DisplayName -eq $null){
             $action = 'NoChanges'
-            $dryRunMessage = 'No changes will be made to the account during enforcement'
+        } elseif ($personContext.PreviousPerson.PrimaryContract.Department.DisplayName -ne $personContext.Person.PrimaryContract.Department.DisplayName) {
+            $action = 'UpdateAccount'
         }
-    } else {
+        #>
+
+
+    }
+    else {
         $action = 'NotFound'
-        $dryRunMessage = "Authorizationbox account for: [$($personContext.Person.DisplayName)] not found. Possibly deleted."
-    } #>
+    }
 
-    # Compare can be made but Nav handles this
-    $action = 'UpdateAccount'
+    #Never send an authorizationrequest after create. Will return an error as user has pending requests
+    if($actionContext.AccountCorrelated -eq $true){
+        $action = 'NoChanges'
+    }
 
-    # Add a message and the result of each of the validations showing what will happen during enforcement
-    if ($actionContext.DryRun -eq $true) {
-        Write-Information "[DryRun] Would update account"
+    #Used as parameter to force an authorizationrequest on 'Force update' button.
+    if($AlwaysSendAutorisationRequest -eq $true){
+        $action = 'UpdateAccount'
     }
 
     # Process
-    if (-not($actionContext.DryRun -eq $true)) {
-        switch ($action) {
-            'UpdateAccount' {
-                Write-Information "Updating Authorizationbox account with accountReference: [$($actionContext.References.Account)]"
-
-                # Make sure to test with special characters and if needed; add utf8 encoding.
-                Invoke-Command -Session $s -ScriptBlock {$UpdateNavUser = Set-NAVServerUser -ServerInstance $using:NavServerInstanceName -Tenant $using:tenant -WindowsAccount $using:SamAccountName -FullName $using:DisplayName -AuthenticationEmail $using:UserPrincipalName -Company $using:DefaultCompany -LanguageID $using:LanguageID -ContactEmail $using:EmailAddress -ErrorAction Inquire -Verbose -Force}
-                break
+    switch ($action) {
+        'UpdateAccount' {
+            $authorization = [PSCustomObject]@{
+                securityId   = $actionContext.data.userSecurityId
+                databaseId   = $DatabaseID
             }
+
+            # Create Authorization
+            $excludedFields = @("userSecurityId")
+
+            $userValueData = $actionContext.Data | Get-Member -MemberType NoteProperty | Where-Object {
+                $excludedFields -notcontains $_.Name
+            } | ForEach-Object {
+                @{ Name = $_.Name; Value = $actionContext.Data.($_.Name) }
+            }
+
+            $userValueSourcesModel = [PSCustomObject]@{}
+            foreach ($item in $userValueData) {
+                $userValueSourcesModel | Add-Member -NotePropertyName $item.Name -NotePropertyValue $item.Value
+            }
+            $authorization | Add-Member -NotePropertyName "userValueSourcesModel" -NotePropertyValue $userValueSourcesModel
+
+            #Send Auth request
+            $splatSendAuthorization = @{
+                Uri     = "$($actionContext.Configuration.BaseUrl)/authorizationrequest/V3/Authorization"
+                Method  = 'POST'
+                Body    = ($authorization | ConvertTo-Json -Depth 10)
+                Headers = $headers
+            } 
+
+            # Make sure to test with special characters and if needed; add utf8 encoding.
+            if (-not($actionContext.DryRun -eq $true)) {
+                Write-Information "Updating AuthorizationBox account with accountReference: [$($actionContext.References.Account.userSecurityId)]"
+                $null = Invoke-RestMethod @splatSendAuthorization -Verbose:$false
+            }
+            else {
+                Write-Information "[DryRun] Update AuthorizationBox account with accountReference: [$($actionContext.References.Account.userSecurityId)], will be executed during enforcement"
+            }
+
+            # Make sure to filter out arrays from $outputContext.Data (If this is not mapped to type Array in the fieldmapping). This is not supported by HelloID.
+            $outputContext.Success = $true
+            $outputContext.AuditLogs.Add([PSCustomObject]@{
+                    Message = "Update account was successful"
+                    IsError = $false
+                }
+            )
+
+            break
+        }
+
+        'NoChanges' {
+            Write-Information "No changes to AuthorizationBox account with accountReference: [$($actionContext.References.Account.userSecurityId)]"
+            $outputContext.Success = $true
+            $outputContext.AuditLogs.Add([PSCustomObject]@{
+                    Message = 'No changes will be made to the account during enforcement'
+                    IsError = $false
+                })
+            break
+        }
+
+        'NotFound' {
+            Write-Information "AuthorizationBox account with userSecurityId [$($actionContext.References.Account.userSecurityId)] in database [$DatabaseID] not found. It may not exist or was deleted."            
+            $outputContext.Success = $false
+            $outputContext.AuditLogs.Add([PSCustomObject]@{
+                    Message = "AuthorizationBox account with userSecurityId [$($actionContext.References.Account.userSecurityId)] in database [$DatabaseID] not found. It may not exist or was deleted."
+                    IsError = $true
+                })
+            break
         }
     }
-    
-    $outputContext.Data.SecurityID = $($actionContext.References.Account)
+} 
 
-    $outputContext.Success = $true
-    $outputContext.AuditLogs.Add([PSCustomObject]@{
-                    Message = "Update account was successful, Account property(s) updated: [$($propertiesChanged.name -join ',')]"
-                    IsError = $false
-    })
-
-
-} catch {
-    Exit-PSSession
-    $outputContext.Success  = $false
+catch {
+    $outputContext.success = $false
     $ex = $PSItem
     if ($($ex.Exception.GetType().FullName -eq 'Microsoft.PowerShell.Commands.HttpResponseException') -or
         $($ex.Exception.GetType().FullName -eq 'System.Net.WebException')) {
         $errorObj = Resolve-AuthorizationboxError -ErrorObject $ex
         $auditMessage = "Could not update Authorizationbox account. Error: $($errorObj.FriendlyMessage)"
         Write-Warning "Error at Line '$($errorObj.ScriptLineNumber)': $($errorObj.Line). Error: $($errorObj.ErrorDetails)"
-    } else {
+    }
+    else {
         $auditMessage = "Could not update Authorizationbox account. Error: $($ex.Exception.Message)"
         Write-Warning "Error at Line '$($ex.InvocationInfo.ScriptLineNumber)': $($ex.InvocationInfo.Line). Error: $($ex.Exception.Message)"
     }

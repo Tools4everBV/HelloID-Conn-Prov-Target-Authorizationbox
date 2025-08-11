@@ -1,5 +1,5 @@
 #################################################
-# HelloID-Conn-Prov-Target-Authorizationbox-Delete
+# HelloID-Conn-Prov-Target-Authorizationbox-Enable
 # PowerShell V2
 #################################################
 
@@ -114,12 +114,11 @@ try {
         Method  = 'GET'
         Headers = $headers
     }
-    
-    #$correlatedAccount = (Invoke-RestMethod @splatGetUsers -Verbose:$false).value
+
     $correlatedAccount = (Invoke-RestMethod @splatGetUsers -Verbose:$false).value | Select-Object -First 1
 
     if ($null -ne $correlatedAccount) {
-        $action = 'DeleteAccount'
+        $action = 'EnableAccount'
     }
     else {
         $action = 'NotFound'
@@ -127,11 +126,11 @@ try {
 
     # Process
     switch ($action) {
-        'DeleteAccount' {
+        'EnableAccount' {
             $authorization = [PSCustomObject]@{
                 securityId   = $actionContext.data.userSecurityId
                 databaseId   = $DatabaseID
-                activateUser = $false
+                activateUser = $true   #Can be toggleed
                 organizationRoles     = @()
             }
 
@@ -150,41 +149,6 @@ try {
             }
             $authorization | Add-Member -NotePropertyName "userValueSourcesModel" -NotePropertyValue $userValueSourcesModel
 
-            <# Delete all roles - Example
-            $splatGetRoles = @{
-                Uri     = "$($actionContext.Configuration.BaseUrl)" + "/odata/v2.0/OrgRolesPerUser?`$filter=(databaseId eq $DatabaseID and userCode eq $($correlatedAccount.key))"    
-                Method  = 'GET'
-                Headers = $headers
-            }
-
-            $Roles = (Invoke-RestMethod @splatGetRoles -Verbose:$false).value
-
-            $currentPermissions = [System.Collections.Generic.List[Object]]::new()
-            if ($Roles.count -gt 0) {
-                foreach ($entitlement in $Roles) {
-                    $currentPermission = @{
-                        DisplayName = $entitlement.OrganizationRoleName
-                        Id          = $entitlement.OrganizationRoleCode
-                        Company     = $entitlement.company
-                    }
-                    $currentPermissions.Add($currentPermission)
-                }
-            }  
-
-            foreach ($permission in $currentPermissions) {
-                    $RemovePermissionObject = @{
-                        status               = "Revoke"
-                        displayname          = $permission.displayname
-                        #startDate            = (Get-Date).ToString("yyyy-MM-ddTHH:mm:ssZ")
-                        endDate              = (Get-Date).ToString("yyyy-MM-ddTHH:mm:ssZ")
-                        organizationRoleCode = $permission.id
-                        company              = $permission.company
-                    }
-
-                    $authorization.organizationRoles += $RemovePermissionObject
-            }
-            #>
-
             #Send Auth request
             $splatSendAuthorization = @{
                 Uri     = "$($actionContext.Configuration.BaseUrl)/authorizationrequest/V3/Authorization"
@@ -193,20 +157,19 @@ try {
                 Headers = $headers
             } 
 
-
             # Make sure to test with special characters and if needed; add utf8 encoding.
             if (-not($actionContext.DryRun -eq $true)) {
-                Write-Information "Delete AuthorizationBox account with accountReference: [$($actionContext.References.Account.userSecurityId)]"
+                Write-Information "Enable AuthorizationBox account with accountReference: [$($actionContext.References.Account.userSecurityId)]"
                 $null = Invoke-RestMethod @splatSendAuthorization -Verbose:$false
             }
             else {
-                Write-Information "[DryRun] Delete AuthorizationBox account with accountReference: [$($actionContext.References.Account.userSecurityId)], will be executed during enforcement"
+                Write-Information "[DryRun] Enable AuthorizationBox account with accountReference: [$($actionContext.References.Account.userSecurityId)], will be executed during enforcement"
             }
 
             # Make sure to filter out arrays from $outputContext.Data (If this is not mapped to type Array in the fieldmapping). This is not supported by HelloID.
             $outputContext.Success = $true
             $outputContext.AuditLogs.Add([PSCustomObject]@{
-                    Message = "Delete account was successful"
+                    Message = "Enable account was successful"
                     IsError = $false
                 }
             )
@@ -214,12 +177,13 @@ try {
             break
         }
 
+
         'NotFound' {
             Write-Information "AuthorizationBox account with userSecurityId [$($actionContext.References.Account.userSecurityId)] in database [$DatabaseID] not found. It may not exist or was deleted."            
             $outputContext.Success = $false
             $outputContext.AuditLogs.Add([PSCustomObject]@{
                     Message = "AuthorizationBox account with userSecurityId [$($actionContext.References.Account.userSecurityId)] in database [$DatabaseID] not found. It may not exist or was deleted."
-                    IsError = $false
+                    IsError = $true
                 })
             break
         }
@@ -231,11 +195,11 @@ catch {
     if ($($ex.Exception.GetType().FullName -eq 'Microsoft.PowerShell.Commands.HttpResponseException') -or
         $($ex.Exception.GetType().FullName -eq 'System.Net.WebException')) {
         $errorObj = Resolve-AuthorizationboxError -ErrorObject $ex
-        $auditMessage = "Could not delete Authorizationbox account. Error: $($errorObj.FriendlyMessage)"
+        $auditMessage = "Could not enable Authorizationbox account. Error: $($errorObj.FriendlyMessage)"
         Write-Warning "Error at Line '$($errorObj.ScriptLineNumber)': $($errorObj.Line). Error: $($errorObj.ErrorDetails)"
     }
     else {
-        $auditMessage = "Could not delete Authorizationbox account. Error: $($ex.Exception.Message)"
+        $auditMessage = "Could not enable Authorizationbox account. Error: $($ex.Exception.Message)"
         Write-Warning "Error at Line '$($ex.InvocationInfo.ScriptLineNumber)': $($ex.InvocationInfo.Line). Error: $($ex.Exception.Message)"
     }
     $outputContext.AuditLogs.Add([PSCustomObject]@{
