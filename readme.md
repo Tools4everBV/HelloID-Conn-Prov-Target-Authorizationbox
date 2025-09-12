@@ -3,7 +3,7 @@
 
 | :warning: Warning |
 |:---------------------------|
-| Note that this connector is "a work in progress" and therefore not ready to use in your production environment. |
+| Note that this connector is "a work in progress" and could require some work to get ready for production environments. Read-me is outdated and still needs to be updated. |
 
 | :information_source: Information |
 |:---------------------------|
@@ -88,3 +88,4 @@ This connector users the nav-tools powershell scripts that Business Central supp
 ## HelloID docs
 
 The official HelloID documentation can be found at: https://docs.helloid.com/
+
