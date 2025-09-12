@@ -9,7 +9,6 @@
 # Set to false at start, at the end, only when no error occurs it is set to true
 $outputContext.Success = $false 
 
-
 #region functions
 function Remove-StringLatinCharacters {
     PARAM ([string]$String)
@@ -69,11 +68,12 @@ function Get-AccessToken {
         }
     
         $splatGetToken = @{
-            Uri     = "$($actionContext.Configuration.BaseUrl)/api/Authenticate/AccessToken"
+            Uri     = "$($actionContext.Configuration.BaseUrl)/api/v3.0/Authenticate/AccessToken"
             Method  = 'POST'
             Body    = $tokenBody | ConvertTo-Json
             Headers = $tokenHeaders
         }
+
         $accessToken = (Invoke-RestMethod @splatGetToken -Verbose:$false).token
         Write-Output $accessToken
     }
@@ -81,6 +81,7 @@ function Get-AccessToken {
         $PSCmdlet.ThrowTerminatingError($_)
     }
 }
+
 #endregion
 
 try {
@@ -115,7 +116,7 @@ try {
     #region Send results to HelloID
     $organizationRoles | ForEach-Object {
         # Shorten DisplayName to max. 100 chars
-        $displayName = "Role - $($_.Name)"
+        $displayName = "Role - $($_.Name) - $($_.deparmentName)"
         $displayName = $displayName.substring(0, [System.Math]::Min(100, $displayName.Length))
 
         $outputContext.Permissions.Add(
@@ -123,7 +124,6 @@ try {
                 displayName    = $displayName
                 identification = @{
                     Id = $_.Key
-                    Company = $_.Company
                 }
             }
         )

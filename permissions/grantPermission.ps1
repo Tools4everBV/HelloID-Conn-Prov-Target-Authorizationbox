@@ -11,7 +11,6 @@ $outputContext.Success = $false
 
 # Set variables, as data is not available in permissions
 $DefaultCompany = 'Company'
-$Domain = 'Domain\'
 
 #region functions
 function Remove-StringLatinCharacters {
@@ -57,30 +56,6 @@ function Resolve-AuthorizationboxError {
     }
 }
 
-function Escape-UrlChars {
-    param (
-        [string]$inputString
-    )
-    
-    # Mapping van te vervangen waardes
-    $charMap = @{
-        "&" = "%26"
-        "/" = "%2F"
-        ":" = "%3A"
-        "?" = "%3F"
-        "#" = "%23"
-        "=" = "%3D"
-        "+" = "%2B"
-    }
-
-    # Gebruik foreach om elk teken in de hash table te vervangen
-    foreach ($key in $charMap.Keys) {
-        $inputString = $inputString -replace [regex]::Escape($key), $charMap[$key]
-    }
-
-    return $inputString
-}
-
 function Get-AccessToken {
     [CmdletBinding()]
     param ()
@@ -96,11 +71,12 @@ function Get-AccessToken {
         }
     
         $splatGetToken = @{
-            Uri     = "$($actionContext.Configuration.BaseUrl)/api/Authenticate/AccessToken"
+            Uri     = "$($actionContext.Configuration.BaseUrl)/api/v3.0/Authenticate/AccessToken"
             Method  = 'POST'
             Body    = $tokenBody | ConvertTo-Json
             Headers = $tokenHeaders
         }
+
         $accessToken = (Invoke-RestMethod @splatGetToken -Verbose:$false).token
         Write-Output $accessToken
     }
@@ -131,7 +107,7 @@ try {
     #
 
     $splatGetRoles = @{
-        Uri     = "$($actionContext.Configuration.BaseUrl)" + '/odata/v2.0/OrgRolesPerUser?$filter=' + "databaseID eq $databaseid and userSecurityId eq $($actionContext.References.Account.userSecurityId)"
+        Uri     = "$($actionContext.Configuration.BaseUrl)" + '/odata/v2.0/OrgRolesPerUser?$filter=' + "databaseID eq $databaseid and userCode eq $($actionContext.References.Account.userSecurityId)"
         Method  = 'GET'
         Headers = $headers
     }
@@ -151,8 +127,8 @@ try {
         }
     }  
 
-    #write-verbose -verbose "Current permissions" 
-    #write-verbose -verbose ($currentPermissions | out-string)
+    write-verbose -verbose "Current permissions" 
+    write-verbose -verbose ($currentPermissions | out-string)
 
     $PermissionObject = @{
         status               = "Assign"
@@ -160,11 +136,10 @@ try {
         startDate            = (Get-Date).ToString("yyyy-MM-ddTHH:mm:ssZ")
         #endDate              = (Get-Date "2099-12-31T23:59:59").ToString("yyyy-MM-ddTHH:mm:ssZ")
         organizationRoleCode = $($actionContext.References.Permission.id)
-        company              = $($actionContext.References.Permission.company)
+        company              = $DefaultCompany
     }
 
-    #if (-not $currentPermissions -or -not $currentPermissions.ContainsValue($($PermissionObject.organizationRoleCode))) {
-    if (-not ($currentPermissions | Where-Object { $_.Id -eq $PermissionObject.organizationRoleCode })) {
+    if (-not $currentPermissions -or -not $currentPermissions.ContainsValue($($PermissionObject.organizationRoleCode))) {
         
         #Extra fields can be added here
         $authorization = [PSCustomObject]@{
@@ -173,7 +148,7 @@ try {
         
             userValueSourcesModel = [PSCustomObject]@{
                 userName = $($actionContext.References.Account.userName)
-                #fullName   = (Remove-StringLatinCharacters $Account.fullName) <- Might be required
+                fullName   = (Remove-StringLatinCharacters $($actionContext.References.Account.DisplayName)) #<- Might be required
             }
             
             organizationRoles     = @()

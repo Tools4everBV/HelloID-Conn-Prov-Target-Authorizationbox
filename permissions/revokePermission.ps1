@@ -11,7 +11,6 @@ $outputContext.Success = $false
 
 # Set variables, as data is not available in permissions
 $DefaultCompany = 'Company'
-$Domain = 'Domain\'
 
 #region functions
 function Remove-StringLatinCharacters {
@@ -57,7 +56,6 @@ function Resolve-AuthorizationboxError {
     }
 }
 
-
 function Get-AccessToken {
     [CmdletBinding()]
     param ()
@@ -73,11 +71,12 @@ function Get-AccessToken {
         }
     
         $splatGetToken = @{
-            Uri     = "$($actionContext.Configuration.BaseUrl)/api/Authenticate/AccessToken"
+            Uri     = "$($actionContext.Configuration.BaseUrl)/api/v3.0/Authenticate/AccessToken"
             Method  = 'POST'
             Body    = $tokenBody | ConvertTo-Json
             Headers = $tokenHeaders
         }
+
         $accessToken = (Invoke-RestMethod @splatGetToken -Verbose:$false).token
         Write-Output $accessToken
     }
@@ -108,7 +107,7 @@ try {
     #
 
     $splatGetRoles = @{
-        Uri     = "$($actionContext.Configuration.BaseUrl)" + '/odata/v2.0/OrgRolesPerUser?$filter=' + "databaseID eq $databaseid and userSecurityId eq $($actionContext.References.Account.userSecurityId)"
+        Uri     = "$($actionContext.Configuration.BaseUrl)" + '/odata/v2.0/OrgRolesPerUser?$filter=' + "databaseID eq $databaseid and userCode eq $($actionContext.References.Account.userSecurityId)"
         Method  = 'GET'
         Headers = $headers
     }
@@ -140,8 +139,7 @@ try {
         company              = $($actionContext.References.Permission.company)
     }
 
-    #if (-not $currentPermissions -or -not $currentPermissions.ContainsValue($($PermissionObject.organizationRoleCode))) {
-    if ($currentPermissions | Where-Object { $_.Id -eq $PermissionObject.organizationRoleCode }) {
+    if ($currentPermissions.ContainsValue($($PermissionObject.organizationRoleCode))) {
         
         #Extra fields can be added here
         $authorization = [PSCustomObject]@{
@@ -150,7 +148,7 @@ try {
         
             userValueSourcesModel = [PSCustomObject]@{
                 userName = $($actionContext.References.Account.userName)
-                #fullName   = (Remove-StringLatinCharacters $Account.fullName) <- Might be required
+                fullName   = (Remove-StringLatinCharacters $($actionContext.References.Account.DisplayName)) #<- Might be required
             }
             
             organizationRoles     = @()
