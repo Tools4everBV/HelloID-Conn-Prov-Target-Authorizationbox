@@ -124,11 +124,12 @@ function Get-AccessToken {
         }
     
         $splatGetToken = @{
-            Uri     = "$($actionContext.Configuration.BaseUrl)/api/Authenticate/AccessToken"
+            Uri     = "$($actionContext.Configuration.BaseUrl)/api/v3.0/Authenticate/AccessToken"
             Method  = 'POST'
             Body    = $tokenBody | ConvertTo-Json
             Headers = $tokenHeaders
         }
+
         $accessToken = (Invoke-RestMethod @splatGetToken -Verbose:$false).token
         Write-Output $accessToken
     }
