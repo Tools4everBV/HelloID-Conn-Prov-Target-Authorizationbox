@@ -1,91 +1,136 @@
-
 # HelloID-Conn-Prov-Target-Authorizationbox
 
-| :warning: Warning |
-|:---------------------------|
-| Note that this connector is "a work in progress" and could require some work to get ready for production environments. Read-me is outdated and still needs to be updated. |
+<!--
+** for extra information about alert syntax please refer to [Alerts](https://docs.github.com/en/get-started/writing-on-github/getting-started-with-writing-and-formatting-on-github/basic-writing-and-formatting-syntax#alerts)
+-->
 
-| :information_source: Information |
-|:---------------------------|
-| This repository contains the connector and configuration code only. The implementer is responsible to acquire the connection details such as username, password, certificate, etc. You might even need to sign a contract or agreement with the supplier before implementing this connector. Please contact the client's application manager to coordinate the connector requirements. |
+> [!WARNING]
+> This connector is a work in progress and may require adjustments before production use.
 
-| :information_source: Information |
-|:---------------------------|
-| This connector must be used in conjunction with the [HelloID-Conn-Prov-Target-DynamicsEmpire](https://github.com/Tools4everBV/HelloID-Conn-Prov-Target-DynamicsEmpire) connector |
+> [!IMPORTANT]
+> This repository contains the connector and configuration code only. The implementer is responsible for obtaining connection details such as username, token, and base URL. You may need agreements with the supplier. Coordinate with the client’s application manager.
+
+> [!NOTE]
+> This connector is designed to be used together with the [HelloID-Conn-Prov-Target-DynamicsEmpire](https://github.com/Tools4everBV/HelloID-Conn-Prov-Target-DynamicsEmpire) connector.
+
+<p align="center">
+  <img src="">
+</p>
 
 ## Table of contents
 
-- [Introduction](#Introduction)
-- [Getting started](#Getting-started)
-  + [Connection settings](#Connection-settings)
-  + [Remarks](#Remarks)
-- [Setup the connector](@Setup-The-Connector)
-- [Getting help](#Getting-help)
-- [HelloID Docs](#HelloID-docs)
+- [HelloID-Conn-Prov-Target-Authorizationbox](#helloid-conn-prov-target-authorizationbox)
+  - [Introduction](#introduction)
+  - [Supported Features](#supported-features)
+  - [Getting Started](#getting-started)
+    - [HelloID Icon URL](#helloid-icon-url)
+    - [Requirements](#requirements)
+    - [Connection Settings](#connection-settings)
+    - [Correlation Configuration](#correlation-configuration)
+    - [Field Mapping](#field-mapping)
+    - [Account Reference](#account-reference)
+  - [Remarks](#remarks)
+    - [Requests and Sub-Permissions Model](#requests-and-sub-permissions-model)
+    - [Creation/Correlation via Business Central](#creationcorrelation-via-business-central)
+  - [Development Resources](#development-resources)
+    - [API Endpoints](#api-endpoints)
+  - [Getting Help](#getting-help)
+  - [HelloID Docs](#helloid-docs)
 
 ## Introduction
+HelloID-Conn-Prov-Target-Authorizationbox is a target connector for Authorizationbox’s REST APIs to manage user authorizations. It correlates and updates users, and submits new authorization requests only (no request updates or status tracking). It is intended to be paired with DynamicsEmpire or DynamicsEmpire Cloud to synchronize user presence and security identifiers.
 
-_HelloID-Conn-Prov-Target-Authorizationbox_ is a _target_ connector. Authorizationbox provides a set of REST API's that allow you to programmatically interact with its data. The connector correlates and updates the user.
+## Supported Features
 
-The following lifecycle events are available:
+The following features are available:
 
-| Event  | Description | Notes |
-|---	 |---	|---	|
-| create.ps1 | Update and correlate an Account | - |
-| update.ps1 | Update the Account | - |
-| entitlements.ps1 | Updates all entitlements | - |
+| Feature                                   | Supported | Actions                              | Remarks                  |
+| ----------------------------------------- | --------- | ------------------------------------ | ------------------------ |
+| **Account Lifecycle**                     | ✅         | Create/Correlate, Update, Enable, Disable, Delete | Enable/Disable currently do not work via the API; see Remarks |
+| **Permissions (SubPermissions)**          | ✅         | Permissions & Sub-permissions         |                          |
+| **Resources**                             | ❌         | -                                    |                          |
+| **Entitlement Import: Accounts**          | ❌         | -                                    |                          |
+| **Entitlement Import: Permissions**       | ❌         | -                                    |                          |
+| **Governance Reconciliation Resolutions** | ❌         | -                                    | Not supported            |
 
+Governance Reconciliation is not supported.
 
 ## Getting started
+
+### HelloID Icon URL
+URL of the icon used for the HelloID Provisioning target system.
+```
+https://github.com/Tools4everBV/HelloID-Conn-Prov-Target-Authorizationbox/blob/main/Icon.png
+```
+
+### Requirements
+
+- Admin user with API key in 2control. (This can cost an extra license, see: https://wiki.2-controlware.com/en/AB-Setup_Administration#authorization-on-swagger)
 
 ### Connection settings
 
 The following settings are required to connect to the API.
 
-| Setting      | Description                             | Mandatory   |
-| ------------ | -----------                             | ----------- |
-| UserName     | The UserName to connect to the API      | Yes         |
-| Token        | The Token to connect to the API         | Yes         |
-| Database     | The Database where the users are stored | Yes         |
-| BaseUrl      | The URL to the API                      | Yes         |
-| Application server information | Information containing information about the applicationserver such as instance name, powershell module path, but also dynamics tentant, permissions and languageID | Yes         | 
+| Setting                | Description                                                                 | Mandatory |
+| ---------------------- | --------------------------------------------------------------------------- | --------- |
+| `UserName`             | Username for the Authorizationbox API                                       | Yes       |
+| `Token`                | API token for Authorizationbox                                              | Yes       |
+| `Database`             | Database/context where users are stored                                     | Yes       |
+| `BaseUrl`              | Authorizationbox API base URL                                               | Yes       |
 
+### Correlation configuration
 
-### Remarks
-This connector requires specific configuration. Requirements are as followed:
-Permissions can only be set through SubPermissions. Because Authorizationbox works with 'requests' that can be denied, HelloID must always check which permissions have been assigned to a user before setting up a request. Doing so, makes whatever is calculated by HelloID contracts 'the truth. Additional roles can not be set by hand, as these will appear in a 'remove' request every time the permissions is updated.
+Match an existing Authorizationbox user to a HelloID person.
 
-Because Authorizationbox only accepts requests that can be denied or approved, HelloID can not set permissions through Business Rules. Monitoring requests status can not be done through HelloID and this will lead to mismatched.
+| Setting                   | Value                                                     |
+| ------------------------- | --------------------------------------------------------- |
+| Enable correlation        | `True`                                                    |
+| Person correlation field  | `Empire - userSecurityId`                                 |
+| Account correlation field | `userSecurityId`                                          |
 
-Only 1 request can be open at any time. There is example code added for updating authorization requests, but this does not work. Instead, we delete the old request and build a new one.
+> [!TIP]
+> _For more information on correlation, please refer to our correlation [documentation](https://docs.helloid.com/en/provisioning/target-systems/powershell-v2-target-systems/correlation.html) pages_.
 
-Organizational Units must be named exactly as in the source system
+### Field mapping
 
-Functions must be named exactly as in the source system
+You can import the field mapping using the `fieldMapping.json` file. `FullName` is always required. Ensure all fields used by Authorizationbox requests are properly mapped to avoid nulling behavior (see Remarks).
 
-If a combination can not be found, this connector will generate an error
+### Account Reference
 
+Store the combined reference required by Authorizationbox/DynamicsEmpire (for example: `SecurityID|FullName|Username`). Changing this after correlation can break Authorizationbox request logic.
 
+## Remarks
 
-#### Creation / correlation process
+- Authorizationbox processes authorizations via requests that can be approved or denied; only one request can be open at a time. In standard usage, HelloID submits requests with `ProcessRequest = $True` so they are automatically processed. If you set this to false, you may encounter errors in HelloID when another request is still open.
 
-Users will currently not be created in AuthorizationBox. Instead this script creates or correlates a user account in Microsoft Dynamics 365 Business Central. It checks if the user already exists (correlates) or creates a new user, configuring necessary attributes like username, email, and permissions. Currently we do not compare the user, and will always update when a user is correlated.
+- Fields not included in a request are currently nulled by Authorizationbox. A fix has been requested from 2-Control. As a workaround, include all relevant fields for each request via field mapping. Adjust your permission scripts accordingly.
 
-This connector users the nav-tools powershell scripts that Business Central supplies.
+- Enabling and disabling users does not currently work via the API. Flags are not set despite end dates and parameters. A fix has been requested from 2-Control.
 
-> Be aware that this might have unexpected implications.
+- Because the workflow is request-based, comparing against a previous account state during request execution is not possible. Update statements have to be configured manually
 
-## Setup the connector
+- In the Disable step, roles are removed. In the Delete step, the user is closed (not hard-deleted). Fully deleting users can cause issues in DynamicsEmpire; therefore, we disable users instead. Hard deletion is possible but may cause problems during reboarding.
 
-> _How to setup the connector in HelloID._ Are special settings required. Like the _primary manager_ settings for a source connector.
+### Creation/correlation via Business Central
+
+- Users are not created directly in Authorizationbox; the connector correlates or creates users in Microsoft Dynamics 365 Business Central (via nav-tools PowerShell) and updates Authorizationbox accordingly through authorization requests.
+
+## Development resources
+
+### API endpoints
+
+- Public API documentation (AuthorizationRequests): https://api.2-controlware.com/authorizationrequest/swagger/index.html
+- Public API documentation (OData stream): https://api.2-controlware.com/swagger/index.html
+
 
 ## Getting help
 
-> _For more information on how to configure a HelloID PowerShell connector, please refer to our [documentation](https://docs.helloid.com/hc/en-us/articles/360012558020-Configure-a-custom-PowerShell-target-system) pages_
+> [!TIP]
+> _For more information on how to configure a HelloID PowerShell connector, please refer to our [documentation](https://docs.helloid.com/en/provisioning/target-systems/powershell-v2-target-systems.html) pages_.
 
-> _If you need help, feel free to ask questions on our [forum](https://forum.helloid.com)_
+> [!TIP]
+>  _If you need help, feel free to ask questions on our [forum](https://forum.helloid.com)_.
 
 ## HelloID docs
 
 The official HelloID documentation can be found at: https://docs.helloid.com/
-
