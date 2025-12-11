@@ -14,7 +14,7 @@
 > This connector is designed to be used together with the [HelloID-Conn-Prov-Target-DynamicsEmpire](https://github.com/Tools4everBV/HelloID-Conn-Prov-Target-DynamicsEmpire) connector.
 
 <p align="center">
-  <img src="">
+  <img src="https://github.com/Tools4everBV/HelloID-Conn-Prov-Target-Authorizationbox/blob/main/Icon.png">
 </p>
 
 ## Table of contents
@@ -56,12 +56,6 @@ The following features are available:
 Governance Reconciliation is not supported.
 
 ## Getting started
-
-### HelloID Icon URL
-URL of the icon used for the HelloID Provisioning target system.
-```
-https://github.com/Tools4everBV/HelloID-Conn-Prov-Target-Authorizationbox/blob/main/Icon.png
-```
 
 ### Requirements
 
@@ -134,3 +128,4 @@ Store the combined reference required by Authorizationbox/DynamicsEmpire (for ex
 ## HelloID docs
 
 The official HelloID documentation can be found at: https://docs.helloid.com/
+
