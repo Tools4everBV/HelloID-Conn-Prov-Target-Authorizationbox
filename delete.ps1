@@ -129,61 +129,31 @@ try {
     switch ($action) {
         'DeleteAccount' {
             $authorization = [PSCustomObject]@{
-                securityId   = $actionContext.data.userSecurityId
+                securityId   = $($actionContext.References.Account.userSecurityId)
                 databaseId   = $DatabaseID
                 activateUser = $false
+                disableUserStartDate = (Get-Date).AddDays(-1).ToString('yyyy-MM-ddTHH:mm:ssZ')
+                processRequest = $true
                 organizationRoles     = @()
             }
 
             # Create Authorization
             $excludedFields = @("userSecurityId")
 
-            $userValueData = $actionContext.Data | Get-Member -MemberType NoteProperty | Where-Object {
-                $excludedFields -notcontains $_.Name
-            } | ForEach-Object {
-                @{ Name = $_.Name; Value = $actionContext.Data.($_.Name) }
+            if($actionContext.data -ne $null){
+                $userValueData = $actionContext.Data | Get-Member -MemberType NoteProperty | Where-Object {
+                    $excludedFields -notcontains $_.Name
+                } | ForEach-Object {
+                    @{ Name = $_.Name; Value = $actionContext.Data.($_.Name) }
+                }
             }
 
             $userValueSourcesModel = [PSCustomObject]@{}
+            $userValueSourcesModel | Add-Member -NotePropertyName 'fullName' -NotePropertyValue $($actionContext.References.Account.fullName)
             foreach ($item in $userValueData) {
                 $userValueSourcesModel | Add-Member -NotePropertyName $item.Name -NotePropertyValue $item.Value
             }
             $authorization | Add-Member -NotePropertyName "userValueSourcesModel" -NotePropertyValue $userValueSourcesModel
-
-            <# Delete all roles - Example
-            $splatGetRoles = @{
-                Uri     = "$($actionContext.Configuration.BaseUrl)" + "/odata/v2.0/OrgRolesPerUser?`$filter=(databaseId eq $DatabaseID and userCode eq $($correlatedAccount.key))"    
-                Method  = 'GET'
-                Headers = $headers
-            }
-
-            $Roles = (Invoke-RestMethod @splatGetRoles -Verbose:$false).value
-
-            $currentPermissions = [System.Collections.Generic.List[Object]]::new()
-            if ($Roles.count -gt 0) {
-                foreach ($entitlement in $Roles) {
-                    $currentPermission = @{
-                        DisplayName = $entitlement.OrganizationRoleName
-                        Id          = $entitlement.OrganizationRoleCode
-                        Company     = $entitlement.company
-                    }
-                    $currentPermissions.Add($currentPermission)
-                }
-            }  
-
-            foreach ($permission in $currentPermissions) {
-                    $RemovePermissionObject = @{
-                        status               = "Revoke"
-                        displayname          = $permission.displayname
-                        #startDate            = (Get-Date).ToString("yyyy-MM-ddTHH:mm:ssZ")
-                        endDate              = (Get-Date).ToString("yyyy-MM-ddTHH:mm:ssZ")
-                        organizationRoleCode = $permission.id
-                        company              = $permission.company
-                    }
-
-                    $authorization.organizationRoles += $RemovePermissionObject
-            }
-            #>
 
             #Send Auth request
             $splatSendAuthorization = @{
@@ -192,7 +162,6 @@ try {
                 Body    = ($authorization | ConvertTo-Json -Depth 10)
                 Headers = $headers
             } 
-
 
             # Make sure to test with special characters and if needed; add utf8 encoding.
             if (-not($actionContext.DryRun -eq $true)) {
@@ -206,7 +175,7 @@ try {
             # Make sure to filter out arrays from $outputContext.Data (If this is not mapped to type Array in the fieldmapping). This is not supported by HelloID.
             $outputContext.Success = $true
             $outputContext.AuditLogs.Add([PSCustomObject]@{
-                    Message = "Delete account was successful"
+                    Message = "Delete account was successful - Authorization request to disable user has been sent succesfully"
                     IsError = $false
                 }
             )

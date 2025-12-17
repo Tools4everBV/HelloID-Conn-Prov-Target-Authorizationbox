@@ -95,7 +95,7 @@ try {
     
     # Define correlation
     $correlationField = $actionContext.CorrelationConfiguration.accountField
-    $correlationValue = $actionContext.CorrelationConfiguration.accountFieldValue
+    $correlationValue = $actionContext.CorrelationConfiguration.personFieldValue
 
     #Write-Information "$correlationField - $correlationValue"
 
@@ -105,7 +105,7 @@ try {
         Method  = 'GET'
         Headers = $headers
     }
-    $DatabaseList = (Invoke-RestMethod @splatGetDatabase -Verbose:$false) | Group-Object name -AsHashTable    
+    $DatabaseList = (Invoke-RestMethod @splatGetDatabase -Verbose:$false) | Group-Object name -AsHashTable        
     $DatabaseID = $DatabaseList[$($actionContext.Configuration.Database)].id
 
     # Validate correlation configuration
@@ -113,7 +113,8 @@ try {
         
         #Get user (If no results are returned, try getting users without the filter)
         $filter = "?`$filter=(databaseId eq $DatabaseID and $correlationField eq $correlationValue)"
-        
+        write-verbose -verbose ($filter | out-string)
+
         $splatGetUsers = @{
             Uri     = "$($actionContext.Configuration.BaseUrl)/odata/v2.0/Users$($filter)"
             Method  = 'GET'
@@ -121,6 +122,12 @@ try {
         }
     
         $User = (Invoke-RestMethod @splatGetUsers -Verbose:$false).value
+
+        #Sometimes, users exists 2x in the DB with the same userSecurityId
+        if($user.count -gt 1){
+            $User = $user[0]
+        }
+        
     }
     else {
         Write-Error "Correlation is required, please configure this in the connector"
@@ -145,10 +152,10 @@ try {
 
             if (-not($actionContext.DryRun -eq $true)) {
 
-
                 $authorization = [PSCustomObject]@{
-                    securityId   = $actionContext.data.userSecurityId
+                    securityId   = $correlationValue 
                     databaseId   = $DatabaseID
+                    processRequest = $true
                 }
 
                 # Create Authorization
@@ -188,6 +195,7 @@ try {
                 $User = (Invoke-RestMethod @splatGetUsers -Verbose:$false).value | Select-Object -First 1
 
                 if ($null -ne $User) {
+
                     $outputContext.Data.userSecurityID = $($User.userSecurityID)
                     $outputContext.Data.fullName = $($User.fullName)
                     $outputContext.Data.userName = $($User.userName)

@@ -132,11 +132,9 @@ try {
 
 
         #This is has to be declared manually, because we can not do a get user with all values. See example below:
-
-        <# Example: If department is changed, set action.
-        if($personContext.PreviousPerson.PrimaryContract.Department.DisplayName -eq $null){
+        if($personContext.PreviousPerson.PrimaryContract.Title.Name -eq $null){
             $action = 'NoChanges'
-        } elseif ($personContext.PreviousPerson.PrimaryContract.Department.DisplayName -ne $personContext.Person.PrimaryContract.Department.DisplayName) {
+        } elseif ($personContext.PreviousPerson.PrimaryContract.Title.Name -ne $personContext.Person.PrimaryContract.Title.Name) {
             $action = 'UpdateAccount'
         }
         #>
@@ -161,8 +159,9 @@ try {
     switch ($action) {
         'UpdateAccount' {
             $authorization = [PSCustomObject]@{
-                securityId   = $actionContext.data.userSecurityId
+                securityId   = $($actionContext.References.Account.userSecurityId)
                 databaseId   = $DatabaseID
+                processRequest = $true
             }
 
             # Create Authorization
@@ -175,9 +174,11 @@ try {
             }
 
             $userValueSourcesModel = [PSCustomObject]@{}
+            $userValueSourcesModel | Add-Member -NotePropertyName 'fullName' -NotePropertyValue $($actionContext.References.Account.fullName)
             foreach ($item in $userValueData) {
                 $userValueSourcesModel | Add-Member -NotePropertyName $item.Name -NotePropertyValue $item.Value
             }
+            
             $authorization | Add-Member -NotePropertyName "userValueSourcesModel" -NotePropertyValue $userValueSourcesModel
 
             #Send Auth request

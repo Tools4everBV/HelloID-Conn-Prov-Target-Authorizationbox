@@ -128,22 +128,27 @@ try {
     switch ($action) {
         'EnableAccount' {
             $authorization = [PSCustomObject]@{
-                securityId   = $actionContext.data.userSecurityId
+                securityId   = $($actionContext.References.Account.userSecurityId)
                 databaseId   = $DatabaseID
-                activateUser = $true   #Can be toggleed
+                processRequest = $true
+                activateUser = $true   #Can be toggled
+                enableUserStartDate = (Get-Date).AddDays(-1).ToString('yyyy-MM-ddTHH:mm:ssZ')
                 organizationRoles     = @()
             }
 
             # Create Authorization
             $excludedFields = @("userSecurityId")
-
-            $userValueData = $actionContext.Data | Get-Member -MemberType NoteProperty | Where-Object {
-                $excludedFields -notcontains $_.Name
-            } | ForEach-Object {
-                @{ Name = $_.Name; Value = $actionContext.Data.($_.Name) }
+            
+            if($actionContext.data -ne $null){
+                $userValueData = $actionContext.Data | Get-Member -MemberType NoteProperty | Where-Object {
+                    $excludedFields -notcontains $_.Name
+                } | ForEach-Object {
+                    @{ Name = $_.Name; Value = $actionContext.Data.($_.Name) }
+                }
             }
 
             $userValueSourcesModel = [PSCustomObject]@{}
+            $userValueSourcesModel | Add-Member -NotePropertyName 'fullName' -NotePropertyValue $($actionContext.References.Account.fullName)
             foreach ($item in $userValueData) {
                 $userValueSourcesModel | Add-Member -NotePropertyName $item.Name -NotePropertyValue $item.Value
             }

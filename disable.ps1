@@ -128,28 +128,33 @@ try {
     switch ($action) {
         'DisableAccount' {
             $authorization = [PSCustomObject]@{
-                securityId   = $actionContext.data.userSecurityId
+                securityId   = $($actionContext.References.Account.userSecurityId)
                 databaseId   = $DatabaseID
-                activateUser = $false   #Can be toggleed
+                activateUser = $false   #Can be toggled
+                disableUserStartDate = (Get-Date).AddDays(-1).ToString('yyyy-MM-ddTHH:mm:ssZ')
+                processRequest = $true
                 organizationRoles     = @()
             }
 
             # Create Authorization
             $excludedFields = @("userSecurityId", "DisabledRoles")
 
-            $userValueData = $actionContext.Data | Get-Member -MemberType NoteProperty | Where-Object {
-                $excludedFields -notcontains $_.Name
-            } | ForEach-Object {
-                @{ Name = $_.Name; Value = $actionContext.Data.($_.Name) }
+            if($actionContext.data -ne $null){
+                $userValueData = $actionContext.Data | Get-Member -MemberType NoteProperty | Where-Object {
+                    $excludedFields -notcontains $_.Name
+                } | ForEach-Object {
+                    @{ Name = $_.Name; Value = $actionContext.Data.($_.Name) }
+                }
             }
 
             $userValueSourcesModel = [PSCustomObject]@{}
+            $userValueSourcesModel | Add-Member -NotePropertyName 'fullName' -NotePropertyValue $($actionContext.References.Account.fullName)
             foreach ($item in $userValueData) {
                 $userValueSourcesModel | Add-Member -NotePropertyName $item.Name -NotePropertyValue $item.Value
             }
             $authorization | Add-Member -NotePropertyName "userValueSourcesModel" -NotePropertyValue $userValueSourcesModel
 
-            <# Delete all roles except roles defined in disabled roles - Example
+            # Delete all roles - Example
             $splatGetRoles = @{
                 Uri     = "$($actionContext.Configuration.BaseUrl)" + "/odata/v2.0/OrgRolesPerUser?`$filter=(databaseId eq $DatabaseID and userCode eq $($correlatedAccount.key))"    
                 Method  = 'GET'
@@ -171,23 +176,19 @@ try {
             }  
 
             foreach ($permission in $currentPermissions) {
-                write-verbose -verbose ($permission | out-string)
-
-                if (-not ($actionContext.data.DisabledRoles -contains "$($permission.displayname)")) {
                     $RemovePermissionObject = @{
                         status               = "Revoke"
                         displayname          = $permission.displayname
                         #startDate            = (Get-Date).ToString("yyyy-MM-ddTHH:mm:ssZ")
-                        endDate              = (Get-Date).ToString("yyyy-MM-ddTHH:mm:ssZ")
+                        endDate              = (Get-Date).AddDays(-1).ToString('yyyy-MM-ddTHH:mm:ssZ')
                         organizationRoleCode = $permission.id
                         company              = $permission.company
                     }
 
                     $authorization.organizationRoles += $RemovePermissionObject
-                } 
             }
 
-            #>
+            #write-verbose -verbose ($authorization | ConvertTo-Json -Depth 10)
 
             #Send Auth request
             $splatSendAuthorization = @{

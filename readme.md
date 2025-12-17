@@ -60,6 +60,7 @@ Governance Reconciliation is not supported.
 ### Requirements
 
 - Admin user with API key in 2control. (This can cost an extra license, see: https://wiki.2-controlware.com/en/AB-Setup_Administration#authorization-on-swagger)
+- ProcessRequest feature is locked behind a feature flag. This has to be activated by 2control, be sure to ask the supportdesk.
 
 ### Connection settings
 
@@ -98,6 +99,8 @@ Store the combined reference required by Authorizationbox/DynamicsEmpire (for ex
 - Authorizationbox processes authorizations via requests that can be approved or denied; only one request can be open at a time. In standard usage, HelloID submits requests with `ProcessRequest = $True` so they are automatically processed. If you set this to false, you may encounter errors in HelloID when another request is still open.
 
 - Fields not included in a request are currently nulled by Authorizationbox. A fix has been requested from 2-Control. As a workaround, include all relevant fields for each request via field mapping. Adjust your permission scripts accordingly.
+
+- If functions are only present once in Authorizationbox, subpermissions will only match on title. If multiple titles are found, department is also needed for a match. 
 
 - Enabling and disabling users does not currently work via the API. Flags are not set despite end dates and parameters. A fix has been requested from 2-Control.
 

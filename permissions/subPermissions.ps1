@@ -11,9 +11,9 @@ $outputContext.Success = $false
 #$actionContext.DryRun = $false
 
 # Toggle voor AB currentpermissions or HelloID currentpermissions - Do not change later
-$useCurrentAuthAB = $true
-$DefaultCompany = 'Company'
-$domain = 'Domain\'
+$useCurrentAuthAB = $false
+$DefaultCompany = ''
+$domain = 'DOMAIN\'
 
 # Set debug logging
 switch ($($actionContext.Configuration.isDebug)) {
@@ -39,8 +39,7 @@ if ($actionContext.CurrentPermissions.Count -gt 0) {
     }
 }
 
-function Remove-StringLatinCharacters
-{
+function Remove-StringLatinCharacters {
     PARAM ([string]$String)
     [Text.Encoding]::ASCII.GetString([Text.Encoding]::GetEncoding("Cyrillic").GetBytes($String))
 }
@@ -139,9 +138,9 @@ function Get-AccessToken {
 }
 
 $Account = [PSCustomObject]@{
-    fullName   = $($actionContext.References.Account.DisplayName)
-    userName   = $($actionContext.References.Account.Username)
-    SecurityID = $($actionContext.References.Account.SecurityID)
+    fullName       = $($actionContext.References.Account.FullName)
+    userName       = $($actionContext.References.Account.Username)
+    userSecurityID = $($actionContext.References.Account.userSecurityID)
 }
 
 #write-verbose -verbose ($account | out-string)
@@ -155,11 +154,20 @@ try {
         Authorization  = "Bearer $($accessToken)"
     }
 
+    #Convert databasename to ID
+    $splatGetDatabase = @{
+        Uri     = "$($actionContext.Configuration.BaseUrl)/api/v2.0/Database"
+        Method  = 'GET'
+        Headers = $headers
+    }
+    $DatabaseList = (Invoke-RestMethod @splatGetDatabase -Verbose:$false) | Group-Object name -AsHashTable
+    $DatabaseID = $DatabaseList[$($actionContext.Configuration.Database)].id
+
     ### We can use Authorizationbox as the truth for currentpermissions but be carefull with this
     if ($useCurrentAuthAB) {
         ## Get roles first and fill current permissions
         $splatGetRoles = @{
-            Uri     = "$($actionContext.Configuration.BaseUrl)" + '/odata/OrgRolesPerUser?$filter=' + "databaseConnection eq '$($actionContext.Configuration.database)' and userName eq '$($account.Username)'"
+            Uri     = "$($actionContext.Configuration.BaseUrl)" + '/odata/v2.0/OrgRolesPerUser?$filter=' + "databaseID eq $databaseid and userName eq '$($account.Username)'"
             Method  = 'GET'
             Headers = $headers
         }
@@ -185,49 +193,88 @@ try {
     write-verbose -verbose "Current permissions" 
     #write-verbose -verbose ($currentPermissions | out-string)
 
-    $contractsInScope = ($personContext.Person.Contracts | Where-Object { $_.Context.InConditions -eq $true })# 
+    $contractsInScope = ($personContext.Person.Contracts)# | Where-Object { $_.Context.InConditions -eq $true })# 
     if ($null -ne $contractsInScope) {
     
-        $filter = "?`$filter=(DatabaseConnection eq '$($actionContext.Configuration.Database)' and "
+        $filter = "(DatabaseID eq $databaseid and "
         $filter += ($contractsinscope.title.name | ForEach-Object { "Name eq '$_'" }) -join " or "
         $filter += ")"
 
         $filter = Escape-UrlChars -inputString $filter
 
         $splatGetOrganizationRoles = @{
-            Uri     = "$($actionContext.Configuration.BaseUrl)/odata/OrganizationRole$($filter)"
+            Uri     = "https://api.2-controlware.com/odata/v2.0/OrganizationRole?`$filter=$($filter)"
             Method  = 'GET'
             Headers = $headers
         }
+            
         $organizationRoles = (Invoke-RestMethod @splatGetOrganizationRoles -Verbose:$false).value
+        #write-verbose -verbose ($organizationRoles | out-string)
 
         $desiredPermissions = [System.Collections.Generic.List[Object]]::new()
         foreach ($contract in $contractsInScope) {
             
-            ## First contract incondition sets the profile for now
-            if ($null -eq $ProfileID) { 
-                $ProfileID = ($organizationRoles | Where-Object { $_.Name -eq $contract.Title.Name -and $_.DeparmentName -eq $contract.Department.displayname }).ProfileId
+            if ($organizationRoles.count -eq 0) {
+                throw "Geen match gevonden met rol: $($contract.Title.Name)"
             }
+
+            if ($organizationRoles.count -eq 1) {
+                #If Title exist once, pick that
+                ## First contract incondition sets the profile for now
+                if ($null -eq $ProfileID) { 
+                    $ProfileID = $($organizationRoles.ProfileId)
+                }
            
-            # create organizationRoleObject without properties: freeFields and companyGroup because it is not required. value will automatically be set to null
-            $desiredPermissionObject = @{
-                status               = "Assign"
-                displayname          = ($organizationRoles | Where-Object { $_.Name -eq $contract.Title.Name -and $_.DeparmentName -eq $contract.Department.displayname }).Name
-                startDate            = (Get-Date).ToString("yyyy-MM-ddTHH:mm:ssZ")
-                #endDate              = (Get-Date "2099-12-31T23:59:59").ToString("yyyy-MM-ddTHH:mm:ssZ")
-                organizationRoleCode = ($organizationRoles | Where-Object { $_.Name -eq $contract.Title.Name -and $_.DeparmentName -eq $contract.Department.displayname }).Key
-                company              = $DefaultCompany
-            }
+                # create organizationRoleObject without properties: freeFields and companyGroup because it is not required. value will automatically be set to null
+                $desiredPermissionObject = @{
+                    status               = "Assign"
+                    displayname          = $($organizationRoles.Name)
+                    startDate            = (Get-Date).ToString("yyyy-MM-ddTHH:mm:ssZ")
+                    #endDate              = (Get-Date "2099-12-31T23:59:59").ToString("yyyy-MM-ddTHH:mm:ssZ")
+                    organizationRoleCode = $($organizationRoles.Key)
+                    company              = $DefaultCompany
+                }
 
-            if ($desiredPermissionObject.organizationRoleCode.count -eq 0) {
-                throw "Geen match gevonden met rol: $($contract.Title.Name), $($contract.Department.displayname) "
-            }
+                if ($desiredPermissionObject.organizationRoleCode.count -eq 0) {
+                    throw "Geen match gevonden met rol: $($contract.Title.Name)"
+                }
 
-            if ($desiredPermissionObject.organizationRoleCode.count -gt 1) {
-                throw "Mogelijk zijn er meerdere rollen met dezelfde functie / afdeling combinatie: $($contract.Title.Name) , $($contract.Department.displayname)"
-            }
+                if ($desiredPermissionObject.organizationRoleCode.count -gt 1) {
+                    throw "Mogelijk zijn er meerdere rollen met dezelfde functie / afdeling combinatie: $($contract.Title.Name)"
+                }
 
-            $desiredPermissions.Add($desiredPermissionObject)
+                $desiredPermissions.Add($desiredPermissionObject)
+            }
+            elseif ($organizationRoles.count -gt 1) {
+                #Otherwise, also match on department
+                                
+                ## First contract incondition sets the profile for now
+                if ($null -eq $ProfileID) { 
+                    $ProfileID = ($organizationRoles | Where-Object { $_.Name -eq $contract.Title.Name -and $_.DeparmentName -eq $contract.Department.Displayname }).ProfileId
+                }
+           
+                # create organizationRoleObject without properties: freeFields and companyGroup because it is not required. value will automatically be set to null
+                $desiredPermissionObject = @{
+                    status               = "Assign"
+                    displayname          = ($organizationRoles | Where-Object { $_.Name -eq $contract.Title.Name -and $_.DeparmentName -eq $contract.Department.Displayname }).Name
+                    startDate            = (Get-Date).ToString("yyyy-MM-ddTHH:mm:ssZ")
+                    #endDate              = (Get-Date "2099-12-31T23:59:59").ToString("yyyy-MM-ddTHH:mm:ssZ")
+                    organizationRoleCode = ($organizationRoles | Where-Object { $_.Name -eq $contract.Title.Name -and $_.DeparmentName -eq $contract.Department.Displayname }).Key
+                    company              = $DefaultCompany
+                }
+
+                if ($desiredPermissionObject.organizationRoleCode.count -eq 0) {
+                    throw "Geen match gevonden met rol: $($contract.Title.Name), $($contract.Department.displayname) "
+                }
+
+                if ($desiredPermissionObject.organizationRoleCode.count -gt 1) {
+                    throw "Mogelijk zijn er meerdere rollen met dezelfde functie / afdeling combinatie: $($contract.Title.Name) , $($contract.Department.displayname)"
+                }
+
+                $desiredPermissions.Add($desiredPermissionObject)
+                
+            }
+            
         }
 
     }
@@ -301,22 +348,27 @@ try {
         }
     }
 
-    #Extra fields can be added here
+    #Extra fields can be added here, make sure to match this with fieldmapping
+    $ExternalEmpId = $personContext.Person.Accounts.MicrosoftActiveDirectory.Mail.split('@')[0]
+    if ($ExternalEmpId.Length -gt 10) {
+        $ExternalEmpId = $ExternalEmpId.Substring(0, 10)
+    }
+
     $authorization = [PSCustomObject]@{
-        securityId            = $Account.SecurityID
-        databaseName          = $($actionContext.Configuration.Database)
+        securityId            = $Account.userSecurityID
+        databaseId            = $DatabaseID
         profileId             = $ProfileID
+        processRequest        = $true
         userValueSourcesModel = [PSCustomObject]@{
-            userName           = $Account.userName
             fullName           = (Remove-StringLatinCharacters $Account.fullName)
+            companyEmail       = $personContext.Person.Accounts.MicrosoftActiveDirectory.Mail
+            email              = $personContext.Person.Accounts.MicrosoftActiveDirectory.Mail
+            employeeNoExternal = $ExternalEmpId
+            jobTitle           = (Remove-StringLatinCharacters $personContext.Person.PrimaryContract.Title.Name)
             firstName          = (Remove-StringLatinCharacters $personContext.Person.Name.NickName)
             middleName         = (Remove-StringLatinCharacters $personContext.Person.Name.FamilyNamePrefix)
             surName            = (Remove-StringLatinCharacters $personContext.Person.Name.FamilyName)
-            employeeNoExternal = $Account.userName.replace("$domain", "")
-            freeField1         = if ($personContext.Person.Details.Gender -eq "MALE") { "DHR" } else { "MEVR" }
-            freeField2         = $domain + $personContext.Manager.Accounts.MicrosoftActiveDirectory.samaccountname
-            mobilePhoneNo      = $personContext.Person.Contact.Business.Phone.Mobile
-            email              = $personContext.Person.Accounts.MicrosoftActiveDirectory.Mail
+            userName           = $Account.userName
         }
         organizationRoles     = @()
     }
@@ -370,73 +422,21 @@ try {
             })
     }
 
+    #write-verbose -verbose $($authorization | out-string)
     if ($authorization.organizationRoles.count -gt 0) {
         if (-not ($actionContext.DryRun -eq $true)) {
            
-            #Check if there are existing authorization requests
-            $splatGetAuthorization = @{
-                Uri     = "$($actionContext.Configuration.BaseUrl)/authorizationrequest/v2/Authorization?databaseName=$($actionContext.Configuration.database)&status=Active"
-                Method  = 'GET'
-                Headers = $headers
-            }
-
-            $ExistingAuthorizations = (Invoke-RestMethod @splatGetAuthorization -Verbose:$false -ErrorAction SilentlyContinue).data | Group-Object securityId -AsHashTable
-            
-            if($ExistingAuthorizations){
-                $PersonAuthorization = $ExistingAuthorizations[$($account.SecurityID)]
-            }
-
-
-            if ($PersonAuthorization) {
-                
-                #Update authorization request
-                #$splatUpdateAuthorization = @{
-                #    Uri     = "$($actionContext.Configuration.BaseUrl)/authorizationrequest/Authorization/$($PersonAuthorization.code)"
-                #    Method  = 'PATCH'
-                #    Body    = $PersonAuthorization | ConvertTo-Json -Depth 10)
-                #    Headers = $headers
-                #}
-                
-                #write-verbose -verbose "$($actionContext.Configuration.BaseUrl)/authorizationrequest/Authorization/$($PersonAuthorization.code)"  
-                
-
-                ## Patching the authorization request currently gives an error 500/400. So we just delete it and resend it.
-                ## This should be fixed by 2control. Somehow it could be that theres multiple requests open
-                ## This should not be possible so we make sure we just delete them all
-
-                foreach ($code in $($PersonAuthorization.code)) {
-                    $splatDeleteAuthorization = @{
-                        Uri     = "$($actionContext.Configuration.BaseUrl)/authorizationrequest/Authorization/$code"
-                        Method  = 'DELETE'
-                        Headers = $headers
-                    }
-
-                    try {
-                        $null = Invoke-RestMethod @splatDeleteAuthorization -Verbose:$false
-                        Write-verbose -verbose "Authorization request: '$code' deleted before resending"
-                    }
-                    catch {
-                        $ex = $PSItem
-                        throw "Mislukt om authorizatieverzoek '$code' te verwijderen. Error: $($ex.Exception.Message)"
-                    }
-                }
-
-            }
-            else {
-                #Update or send condition, should be implemented later
-                write-verbose -verbose "No Authorizations to update or revoke"
-            }
-
             try {
-                #For now, always send a new request
+            
+                #Send Auth request
                 $splatUpdateAuthorization = @{
-                    Uri     = "$($actionContext.Configuration.BaseUrl)/authorizationrequest/Authorization"
+                    Uri     = "$($actionContext.Configuration.BaseUrl)/authorizationrequest/V3/Authorization"
                     Method  = 'POST'
                     Body    = ($authorization | ConvertTo-Json -Depth 10)
                     Headers = $headers
                 } 
 
-               $null = Invoke-RestMethod @splatUpdateAuthorization -Verbose:$false
+                $null = Invoke-RestMethod @splatUpdateAuthorization -Verbose:$false
 
                 $outputContext.AuditLogs.Add([PSCustomObject]@{
                         Message = "Authorizatie succesvol verzonden"
