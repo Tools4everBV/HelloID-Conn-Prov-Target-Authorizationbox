@@ -4,9 +4,6 @@
 ** for extra information about alert syntax please refer to [Alerts](https://docs.github.com/en/get-started/writing-on-github/getting-started-with-writing-and-formatting-on-github/basic-writing-and-formatting-syntax#alerts)
 -->
 
-> [!WARNING]
-> This connector is a work in progress and may require adjustments before production use.
-
 > [!IMPORTANT]
 > This repository contains the connector and configuration code only. The implementer is responsible for obtaining connection details such as username, token, and base URL. You may need agreements with the supplier. Coordinate with the client’s application manager.
 
