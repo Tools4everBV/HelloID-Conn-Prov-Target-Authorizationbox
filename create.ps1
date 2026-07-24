@@ -44,11 +44,6 @@ function Resolve-AuthorizationboxError {
     }
 }
 
-function Remove-StringLatinCharacters {
-    PARAM ([string]$String)
-    [Text.Encoding]::ASCII.GetString([Text.Encoding]::GetEncoding("Cyrillic").GetBytes($String))
-}
-
 function Get-AccessToken {
     [CmdletBinding()]
     param ()
@@ -107,6 +102,9 @@ try {
     }
     $DatabaseList = (Invoke-RestMethod @splatGetDatabase -Verbose:$false) | Group-Object name -AsHashTable        
     $DatabaseID = $DatabaseList[$($actionContext.Configuration.Database)].id
+    if ([string]::IsNullOrWhiteSpace([string]$DatabaseID)) {
+        throw "DatabaseID could not be resolved for database [$($actionContext.Configuration.Database)]"
+    }
 
     # Validate correlation configuration
     if ($actionContext.CorrelationConfiguration.Enabled) {
@@ -173,11 +171,20 @@ try {
                 }
                 $authorization | Add-Member -NotePropertyName "userValueSourcesModel" -NotePropertyValue $userValueSourcesModel
 
+                # Convert authorization object to JSON with UTF-8 encoding
+                $authorization_json = ($authorization | ConvertTo-Json -Depth 10)
+                $headers = @{
+                    'Content-Type' = 'application/json;charset=utf-8'
+                    Accept         = 'application/json;odata.metadata=minimal;odata.streaming=true'
+                    Authorization  = "Bearer $($accessToken)"
+                }
+
                 #Send Auth request
                 $splatSendAuthorization = @{
                     Uri     = "$($actionContext.Configuration.BaseUrl)/authorizationrequest/V3/Authorization"
                     Method  = 'POST'
-                    Body    = ($authorization | ConvertTo-Json -Depth 10)
+                    #Body    = ($authorization | ConvertTo-Json -Depth 10)
+                    Body    = [System.Text.Encoding]::UTF8.GetBytes($authorization_json)
                     Headers = $headers
                 } 
 

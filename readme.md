@@ -4,9 +4,6 @@
 ** for extra information about alert syntax please refer to [Alerts](https://docs.github.com/en/get-started/writing-on-github/getting-started-with-writing-and-formatting-on-github/basic-writing-and-formatting-syntax#alerts)
 -->
 
-> [!WARNING]
-> This connector is a work in progress and may require adjustments before production use.
-
 > [!IMPORTANT]
 > This repository contains the connector and configuration code only. The implementer is responsible for obtaining connection details such as username, token, and base URL. You may need agreements with the supplier. Coordinate with the client’s application manager.
 
@@ -46,7 +43,7 @@ The following features are available:
 
 | Feature                                   | Supported | Actions                              | Remarks                  |
 | ----------------------------------------- | --------- | ------------------------------------ | ------------------------ |
-| **Account Lifecycle**                     | ✅         | Create/Correlate, Update, Enable, Disable, Delete | Enable/Disable currently do not work via the API; see Remarks |
+| **Account Lifecycle**                     | ✅         | Create/Correlate, Update, Enable, Disable, Delete |                          |
 | **Permissions (SubPermissions)**          | ✅         | Permissions & Sub-permissions         |                          |
 | **Resources**                             | ❌         | -                                    |                          |
 | **Entitlement Import: Accounts**          | ❌         | -                                    |                          |
@@ -60,7 +57,6 @@ Governance Reconciliation is not supported.
 ### Requirements
 
 - Admin user with API key in 2control. (This can cost an extra license, see: https://wiki.2-controlware.com/en/AB-Setup_Administration#authorization-on-swagger)
-- ProcessRequest feature is locked behind a feature flag. This has to be activated by 2control, be sure to ask the supportdesk.
 
 ### Connection settings
 
@@ -88,7 +84,7 @@ Match an existing Authorizationbox user to a HelloID person.
 
 ### Field mapping
 
-You can import the field mapping using the `fieldMapping.json` file. `FullName` is always required. Ensure all fields used by Authorizationbox requests are properly mapped to avoid nulling behavior (see Remarks).
+You can import the field mapping using the `fieldMapping.json` file. `FullName` is always required. Field mappings are configured for Create and Update actions only. Disable and Delete scripts retrieve current user data from Authorizationbox directly to avoid nulling behavior (see Remarks).
 
 ### Account Reference
 
@@ -98,15 +94,11 @@ Store the combined reference required by Authorizationbox/DynamicsEmpire (for ex
 
 - Authorizationbox processes authorizations via requests that can be approved or denied; only one request can be open at a time. In standard usage, HelloID submits requests with `ProcessRequest = $True` so they are automatically processed. If you set this to false, you may encounter errors in HelloID when another request is still open.
 
-- Fields not included in a request are currently nulled by Authorizationbox. A fix has been requested from 2-Control. As a workaround, include all relevant fields for each request via field mapping. Adjust your permission scripts accordingly.
-
 - If functions are only present once in Authorizationbox, subpermissions will only match on title. If multiple titles are found, department is also needed for a match. 
 
-- Enabling and disabling users does not currently work via the API. Flags are not set despite end dates and parameters. A fix has been requested from 2-Control.
+- In the Disable step, an example is added for removing roles. In the Delete step, the user is closed (not hard-deleted). Fully deleting users can cause issues in DynamicsEmpire; therefore, we disable users instead. Hard deletion is possible but may cause problems during reboarding.
 
-- Because the workflow is request-based, comparing against a previous account state during request execution is not possible. Update statements have to be configured manually
-
-- In the Disable step, roles are removed. In the Delete step, the user is closed (not hard-deleted). Fully deleting users can cause issues in DynamicsEmpire; therefore, we disable users instead. Hard deletion is possible but may cause problems during reboarding.
+- Be carefull when updating employeeNoExternal as this can cause new users to appear in Empire.
 
 ### Creation/correlation via Business Central
 

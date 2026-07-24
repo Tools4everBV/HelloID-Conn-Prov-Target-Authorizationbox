@@ -48,11 +48,6 @@ function Resolve-AuthorizationboxError {
     }
 }
 
-function Remove-StringLatinCharacters {
-    PARAM ([string]$String)
-    [Text.Encoding]::ASCII.GetString([Text.Encoding]::GetEncoding("Cyrillic").GetBytes($String))
-}
-
 function Get-AccessToken {
     [CmdletBinding()]
     param ()
@@ -68,7 +63,7 @@ function Get-AccessToken {
         }
     
         $splatGetToken = @{
-            Uri     = "$($actionContext.Configuration.BaseUrl)/api/V3.0/Authenticate/AccessToken"
+            Uri     = "$($actionContext.Configuration.BaseUrl)/api/v3.0/Authenticate/AccessToken"
             Method  = 'POST'
             Body    = $tokenBody | ConvertTo-Json
             Headers = $tokenHeaders
@@ -106,6 +101,9 @@ try {
     }
     $DatabaseList = (Invoke-RestMethod @splatGetDatabase -Verbose:$false) | Group-Object name -AsHashTable    
     $DatabaseID = $DatabaseList[$($actionContext.Configuration.Database)].id
+    if ([string]::IsNullOrWhiteSpace([string]$DatabaseID)) {
+        throw "DatabaseID could not be resolved for database [$($actionContext.Configuration.Database)]"
+    }
 
     # Check if account exists
     Write-Information 'Verifying if an Authorizationbox account exists'
@@ -118,27 +116,47 @@ try {
         Headers = $headers
     }
     
-    #$correlatedAccount = (Invoke-RestMethod @splatGetUsers -Verbose:$false).value
     $correlatedAccount = (Invoke-RestMethod @splatGetUsers -Verbose:$false).value | Select-Object -First 1
 
     if ($null -ne $correlatedAccount) {
         $action = 'NoChanges'
-        
-        #Custom compare, we cant do a Get on the fields we need
-        $outputContext.AuditLogs.Add([PSCustomObject]@{
-                    Message = "Previous: $($personContext.PreviousPerson.PrimaryContract.Custom.ABAdministratie) + Current: $($personContext.Person.PrimaryContract.Custom.ABAdministratie)"
-                    IsError = $false
-        })
 
-
-        #This is has to be declared manually, because we can not do a get user with all values. See example below:
-        if($personContext.PreviousPerson.PrimaryContract.Title.Name -eq $null){
-            $action = 'NoChanges'
-        } elseif ($personContext.PreviousPerson.PrimaryContract.Title.Name -ne $personContext.Person.PrimaryContract.Title.Name) {
-            $action = 'UpdateAccount'
+        # Get current user data from Authorizationbox to compare
+        Write-Information 'Retrieving current user data from Authorizationbox'
+        $splatGetUserData = @{
+            Uri     = "$($actionContext.Configuration.BaseUrl)/api/v2.0/Users/($($correlatedAccount.key))/GetUserDataForUser"
+            Method  = 'GET'
+            Headers = $headers
         }
-        #>
 
+        try {
+            $currentUserData = (Invoke-RestMethod @splatGetUserData -Verbose:$false)
+
+            # Compare current data with new data
+            $hasChanges = $false
+
+            foreach ($property in $actionContext.Data.PSObject.Properties) {
+                $currentValue = $currentUserData | Where-Object { $_.type -eq $property.Name } | Select-Object -ExpandProperty value -ErrorAction SilentlyContinue
+                $newValue = $property.Value
+
+                # Skip comparison if both values are effectively empty
+                if ([string]::IsNullOrWhiteSpace($currentValue) -and [string]::IsNullOrWhiteSpace($newValue)) {
+                    continue
+                }
+
+                if ($currentValue -ne $newValue) {
+                    Write-Verbose -verbose "Change detected in field '$($property.Name)': Current='$currentValue', New='$newValue'"
+                    $hasChanges = $true
+                }
+            }
+
+            if ($hasChanges) {
+                $action = 'UpdateAccount'
+            }
+        }
+        catch {
+            Throw "Could not retrieve current user data: $($_.Exception.Message)."
+        }
 
     }
     else {
@@ -165,34 +183,72 @@ try {
             }
 
             # Create Authorization
-            $excludedFields = @("userSecurityId")
+            $excludedFields = @("userSecurityId", "fullName")
 
-            $userValueData = $actionContext.Data | Get-Member -MemberType NoteProperty | Where-Object {
+            # Start with all fields from currentUserData
+            $userValueData = @{}
+            foreach ($field in $currentUserData) {
+                if ($excludedFields -notcontains $field.type) {
+                    $userValueData[$field.type] = $field.value
+                }
+            }
+
+            # Overwrite with fields from actionContext.Data
+            $actionContext.Data | Get-Member -MemberType NoteProperty | Where-Object {
                 $excludedFields -notcontains $_.Name
             } | ForEach-Object {
-                @{ Name = $_.Name; Value = $actionContext.Data.($_.Name) }
+                $userValueData[$_.Name] = $actionContext.Data.($_.Name)
             }
 
             $userValueSourcesModel = [PSCustomObject]@{}
             $userValueSourcesModel | Add-Member -NotePropertyName 'fullName' -NotePropertyValue $($actionContext.References.Account.fullName)
-            foreach ($item in $userValueData) {
-                $userValueSourcesModel | Add-Member -NotePropertyName $item.Name -NotePropertyValue $item.Value
+
+            foreach ($fieldName in $userValueData.Keys) {
+                $userValueSourcesModel | Add-Member -NotePropertyName $fieldName -NotePropertyValue $userValueData[$fieldName]
             }
-            
+
             $authorization | Add-Member -NotePropertyName "userValueSourcesModel" -NotePropertyValue $userValueSourcesModel
+
+            # Convert authorization object to JSON with UTF-8 encoding
+            $authorization_json = ($authorization | ConvertTo-Json -Depth 10)
+            $headers = @{
+                'Content-Type' = 'application/json;charset=utf-8'
+                Accept         = 'application/json;odata.metadata=minimal;odata.streaming=true'
+                Authorization  = "Bearer $($accessToken)"
+            }
 
             #Send Auth request
             $splatSendAuthorization = @{
                 Uri     = "$($actionContext.Configuration.BaseUrl)/authorizationrequest/V3/Authorization"
                 Method  = 'POST'
-                Body    = ($authorization | ConvertTo-Json -Depth 10)
+                #Body    = ($authorization | ConvertTo-Json -Depth 10)
+                Body    = [System.Text.Encoding]::UTF8.GetBytes($authorization_json)
                 Headers = $headers
             } 
 
             # Make sure to test with special characters and if needed; add utf8 encoding.
             if (-not($actionContext.DryRun -eq $true)) {
                 Write-Information "Updating AuthorizationBox account with accountReference: [$($actionContext.References.Account.userSecurityId)]"
-                $null = Invoke-RestMethod @splatSendAuthorization -Verbose:$false
+                
+                # Single retry for transient "active requests pending" condition
+                try {
+                    $null = Invoke-RestMethod @splatSendAuthorization -Verbose:$false
+                }
+                catch {
+                    $errorObj = Resolve-AuthorizationboxError -ErrorObject $_
+                    $errText = $($errorObj.FriendlyMessage)
+                    
+                    if ($errText -match 'active requests pending') {
+                        Write-Information "Pending request detected; retrying once in 5s"
+                        Start-Sleep -Seconds 5
+                        # Second attempt; any failure bubbles to outer catch
+                        $null = Invoke-RestMethod @splatSendAuthorization -Verbose:$false
+                    }
+                    else {
+                        throw
+                    }
+                }
+                
             }
             else {
                 Write-Information "[DryRun] Update AuthorizationBox account with accountReference: [$($actionContext.References.Account.userSecurityId)], will be executed during enforcement"
