@@ -24,7 +24,8 @@
       "MappingActions": [
         {
           "MapForActions": [
-            "Create"
+            "Create",
+            "Update"
           ],
           "MappingMode": "Field",
           "Value": "\"Person.Contact.Business.Phone.Mobile\"",
@@ -40,7 +41,8 @@
       "MappingActions": [
         {
           "MapForActions": [
-            "Create"
+            "Create",
+            "Update"
           ],
           "MappingMode": "Field",
           "Value": "\"Person.Contact.Business.Phone.Fixed\"",
@@ -73,9 +75,7 @@
         {
           "MapForActions": [
             "Create",
-            "Update",
-            "Disable",
-            "Delete"
+            "Update"
           ],
           "MappingMode": "Complex",
           "Value": "\"function getValue(){\\r\\n    let email = Person.Accounts.MicrosoftActiveDirectory.mail\\r\\n    \\r\\n    return email\\r\\n}\\r\\n\\r\\ngetValue()\"",
@@ -92,9 +92,7 @@
         {
           "MapForActions": [
             "Create",
-            "Update",
-            "Disable",
-            "Delete"
+            "Update"
           ],
           "MappingMode": "Complex",
           "Value": "\"function getValue(){\\r\\n    let email = Person.Accounts.MicrosoftActiveDirectory.mail\\r\\n    \\r\\n    return email\\r\\n}\\r\\n\\r\\ngetValue()\"",
@@ -110,10 +108,7 @@
       "MappingActions": [
         {
           "MapForActions": [
-            "Create",
-            "Update",
-            "Delete",
-            "Disable"
+            "Create"
           ],
           "MappingMode": "Complex",
           "Value": "\"function getValue(){\\r\\n    let email = Person.Accounts.MicrosoftActiveDirectory.mail\\r\\n    \\r\\n    if(email != null){\\r\\n        email = email.split(\\\"@\\\")[0]\\r\\n        email = email.substring(0,10)\\r\\n    }\\r\\n\\r\\n    return email\\r\\n}\\r\\n\\r\\ngetValue()\"",
@@ -130,9 +125,7 @@
         {
           "MapForActions": [
             "Create",
-            "Update",
-            "Delete",
-            "Disable"
+            "Update"
           ],
           "MappingMode": "Complex",
           "Value": "\"function removeDiacritics(text) {\\r\\n    return text.normalize(\\\"NFD\\\").replace(/[\\\\u0300-\\\\u036f]/g, \\\"\\\");\\r\\n}\\r\\n\\r\\nfunction generateFirstName() {\\r\\n    let firstName = Person.Name.NickName;\\r\\n    firstName = removeDiacritics(firstName)\\r\\n\\r\\n    return firstName;\\r\\n}\\r\\n\\r\\ngenerateFirstName();\"",
@@ -149,9 +142,7 @@
         {
           "MapForActions": [
             "Create",
-            "Update",
-            "Delete",
-            "Disable"
+            "Update"
           ],
           "MappingMode": "Field",
           "Value": "\"Person.Name.Initials\"",
@@ -168,9 +159,7 @@
         {
           "MapForActions": [
             "Create",
-            "Update",
-            "Delete",
-            "Disable"
+            "Update"
           ],
           "MappingMode": "Field",
           "Value": "\"Person.PrimaryContract.Title.Name\"",
@@ -187,9 +176,7 @@
         {
           "MapForActions": [
             "Create",
-            "Update",
-            "Disable",
-            "Delete"
+            "Update"
           ],
           "MappingMode": "Complex",
           "Value": "\"function generateMiddlename() {\\r\\n    let middleName = Person.Name.FamilyNamePrefix;\\r\\n    let middleNamePartner = Person.Name.FamilyNamePartnerPrefix;\\r\\n    let convention = Person.Name.Convention;\\r\\n\\r\\n    let generatedMiddlename = '';\\r\\n    switch (convention) {\\r\\n        case \\\"PB\\\":\\r\\n        case \\\"P\\\":\\r\\n            generatedMiddlename = middleNamePartner;\\r\\n            break;\\r\\n        case \\\"B\\\":\\r\\n        case \\\"BP\\\":\\r\\n        default:\\r\\n            generatedMiddlename = middleName;\\r\\n            break;\\r\\n    }\\r\\n\\r\\n    return generatedMiddlename;\\r\\n}\\r\\n\\r\\ngenerateMiddlename();\"",
@@ -206,9 +193,7 @@
         {
           "MapForActions": [
             "Create",
-            "Update",
-            "Delete",
-            "Disable"
+            "Update"
           ],
           "MappingMode": "Complex",
           "Value": "\"function removeDiacritics(text) {\\r\\n    return text.normalize(\\\"NFD\\\").replace(/[\\\\u0300-\\\\u036f]/g, \\\"\\\");\\r\\n}\\r\\n\\r\\nfunction generateSurname() {\\r\\n    let middleName = Person.Name.FamilyNamePrefix;\\r\\n    let lastName = Person.Name.FamilyName;\\r\\n    let middleNamePartner = Person.Name.FamilyNamePartnerPrefix;\\r\\n    let lastNamePartner = Person.Name.FamilyNamePartner;\\r\\n    let convention = Person.Name.Convention;\\r\\n\\r\\n    let surName = '';\\r\\n    switch (convention) {\\r\\n        case \\\"BP\\\":\\r\\n            surName = lastName;\\r\\n\\r\\n            surName = surName + ' - ';\\r\\n            if (typeof middleNamePartner !== 'undefined' && middleNamePartner) { surName = surName + middleNamePartner + ' ' }\\r\\n            surName = surName + lastNamePartner;\\r\\n            break;\\r\\n        case \\\"PB\\\":\\r\\n            surName = lastNamePartner;\\r\\n\\r\\n            surName = surName + ' - ';\\r\\n            if (typeof middleName !== 'undefined' && middleName) { surName = surName + middleName + ' ' }\\r\\n            surName = surName + lastName;\\r\\n            break;\\r\\n        case \\\"P\\\":\\r\\n            surName = lastNamePartner;\\r\\n            break;\\r\\n        case \\\"B\\\":\\r\\n        default:\\r\\n            surName = lastName;\\r\\n            break;\\r\\n    }\\r\\n    // Trim spaces at start and end\\r\\n    surName = surName.trim();\\r\\n\\r\\n    // Shorten string to maxAttributeLength \\r\\n    const maxAttributeLength = 64;\\r\\n    surName = surName.substring(0, maxAttributeLength);\\r\\n\\r\\n    surName = removeDiacritics(surName);\\r\\n\\r\\n    return surName;\\r\\n}\\r\\n\\r\\ngenerateSurname();\"",
@@ -225,38 +210,12 @@
         {
           "MapForActions": [
             "Create",
-            "Update",
-            "Disable"
+            "Update"
           ],
           "MappingMode": "Complex",
           "Value": "\"function getValue(){\\r\\n    let userName = Person.Accounts.MicrosoftActiveDirectory.Username;\\r\\n    return  userName\\r\\n}\\r\\n\\r\\ngetValue()\"",
           "UsedInNotifications": false,
           "StoreInAccountData": true
-        },
-        {
-          "MapForActions": [
-            "Delete"
-          ],
-          "MappingMode": "Fixed",
-          "Value": "\"\"",
-          "UsedInNotifications": false,
-          "StoreInAccountData": false
-        }
-      ]
-    },
-    {
-      "Name": "DisabledRoles",
-      "Description": "Not required: You can keep a set of roles on disabled users when disabling users. See disable script for example",
-      "Type": "Array",
-      "MappingActions": [
-        {
-          "MapForActions": [
-            "Disable"
-          ],
-          "MappingMode": "Complex",
-          "Value": "\"function getValue(){\\r\\n    let values = [\\\"Buitendienst App gebruiker\\\", \\\"Urenportaal gebruiker\\\"];\\r\\n\\r\\n    return values\\r\\n}\\r\\n\\r\\ngetValue()\"",
-          "UsedInNotifications": false,
-          "StoreInAccountData": false
         }
       ]
     }

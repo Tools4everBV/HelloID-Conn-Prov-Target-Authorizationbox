@@ -10,11 +10,6 @@
 $outputContext.Success = $false 
 
 #region functions
-function Remove-StringLatinCharacters {
-    PARAM ([string]$String)
-    [Text.Encoding]::ASCII.GetString([Text.Encoding]::GetEncoding("Cyrillic").GetBytes($String))
-}
-
 function Resolve-AuthorizationboxError {
     [CmdletBinding()]
     param (

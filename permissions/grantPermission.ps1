@@ -3,6 +3,8 @@
 # PowerShell V2
 ############################################################
 
+#$actionContext.DryRun = $false
+
 # Enable TLS1.2
 [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor [System.Net.SecurityProtocolType]::Tls12
 
@@ -10,14 +12,10 @@
 $outputContext.Success = $false 
 
 # Set variables, as data is not available in permissions
-$DefaultCompany = 'Company'
+# Be sure to not change this later as this may cause bad requests in Authorizationbox
+$DefaultCompany = ''
 
 #region functions
-function Remove-StringLatinCharacters {
-    PARAM ([string]$String)
-    [Text.Encoding]::ASCII.GetString([Text.Encoding]::GetEncoding("Cyrillic").GetBytes($String))
-}
-
 function Resolve-AuthorizationboxError {
     [CmdletBinding()]
     param (
@@ -106,13 +104,42 @@ try {
     $DatabaseID = $DatabaseList[$($actionContext.Configuration.Database)].id
     #
 
+    # Get user to retrieve key for user data lookup
+    $filter = "?`$filter=(databaseId eq $DatabaseID and userSecurityId eq $($actionContext.References.Account.userSecurityId))"
+    $splatGetUsers = @{
+        Uri     = "$($actionContext.Configuration.BaseUrl)/odata/v2.0/Users$($filter)"
+        Method  = 'GET'
+        Headers = $headers
+    }
+    $correlatedAccount = (Invoke-RestMethod @splatGetUsers -Verbose:$false).value | Select-Object -First 1
+
+    # Get current user data from Authorizationbox
+    if ($null -ne $correlatedAccount) {
+        Write-Information 'Retrieving current user data from Authorizationbox'
+        $splatGetUserData = @{
+            Uri     = "$($actionContext.Configuration.BaseUrl)/api/v2.0/Users/($($correlatedAccount.key))/GetUserDataForUser"
+            Method  = 'GET'
+            Headers = $headers
+        }
+        
+        try {
+            $currentUserData = (Invoke-RestMethod @splatGetUserData -Verbose:$false)
+        }
+        catch {
+            Write-Warning "Could not retrieve current user data: $($_.Exception.Message)"
+            $currentUserData = $null
+        }
+    }
+
+    ## Get roles first and fill current permissions AB
     $splatGetRoles = @{
-        Uri     = "$($actionContext.Configuration.BaseUrl)" + '/odata/v2.0/OrgRolesPerUser?$filter=' + "databaseID eq $databaseid and userCode eq $($actionContext.References.Account.userSecurityId)"
+        Uri     = "$($actionContext.Configuration.BaseUrl)" + '/odata/v2.0/OrgRolesPerUser?$filter=' + "databaseID eq $databaseid and userName eq '$($actionContext.References.Account.Username)'"
         Method  = 'GET'
         Headers = $headers
     }
 
     $Roles = (Invoke-RestMethod @splatGetRoles -Verbose:$false).value
+   
 
     $currentPermissions = [System.Collections.Generic.List[Object]]::new()
     if ($Roles.count -gt 0) {
@@ -139,35 +166,113 @@ try {
         company              = $DefaultCompany
     }
 
-    if (-not $currentPermissions -or -not $currentPermissions.ContainsValue($($PermissionObject.organizationRoleCode))) {
+    # Check if permission already exists
+    $alreadyInAB = $false
+    if ($currentPermissions -and $currentPermissions.Count -gt 0) {
+        $alreadyInAB = $null -ne ($currentPermissions | Where-Object {
+                $_.Id -eq $PermissionObject.organizationRoleCode -and (
+                    [string]::IsNullOrEmpty($PermissionObject.company) -or $_.Company -eq $PermissionObject.company
+                )
+            })
+    }
+
+    if ($alreadyInAB) {
+        Write-Information "Grant skipped; role already exists in AuhorizationBox: [$($actionContext.PermissionDisplayName) / $($PermissionObject.organizationRoleCode)]"
+        $outputContext.AuditLogs.Add([PSCustomObject]@{
+                Message = "Grant skipped; role already exists in AuhorizationBox: [$($actionContext.PermissionDisplayName)]"
+                IsError = $false
+            })
+    }
+    else {
+        # Get profileId only if user has no current roles (first role assignment)
+        $ProfileID = $null
+        if ($currentPermissions.Count -eq 0) {
+            Write-Information 'User has no roles yet, retrieving profileId from organizationRole'
+            $splatGetOrgRole = @{
+                Uri     = "$($actionContext.Configuration.BaseUrl)/odata/v2.0/OrganizationRole?/$($actionContext.References.Permission.id)"
+                Method  = 'GET'
+                Headers = $headers
+            }
+            $orgRole = (Invoke-RestMethod @splatGetOrgRole -Verbose:$false).value | Select-Object -First 1
+            if ($null -ne $orgRole) {
+                $ProfileID = $orgRole.ProfileId
+                Write-Information "ProfileId retrieved: $ProfileID"
+            }
+        }
+
+        # Build userValueSourcesModel from current user data
+        if ($null -ne $currentUserData) {
+            $excludedFields = @("userSecurityId", "fullName")
+            
+            # Use all fields from currentUserData
+            $userValueData = @{}
+            foreach ($field in $currentUserData) {
+                if ($excludedFields -notcontains $field.type) {
+                    $userValueData[$field.type] = $field.value
+                }
+            }
+
+            $userValueSourcesModel = [PSCustomObject]@{}
+            $userValueSourcesModel | Add-Member -NotePropertyName 'fullName' -NotePropertyValue $($actionContext.References.Account.FullName)
+            
+            foreach ($fieldName in $userValueData.Keys) {
+                $userValueSourcesModel | Add-Member -NotePropertyName $fieldName -NotePropertyValue $userValueData[$fieldName]
+            }
+        }
+        else {
+            Throw "No current user data available, authorization request cannot be processed"
+        }
         
-        #Extra fields can be added here
         $authorization = [PSCustomObject]@{
             securityId            = $($actionContext.References.Account.userSecurityId)
             databaseId            = $DatabaseID
-        
-            userValueSourcesModel = [PSCustomObject]@{
-                userName = $($actionContext.References.Account.userName)
-                fullName   = (Remove-StringLatinCharacters $($actionContext.References.Account.DisplayName)) #<- Might be required
-            }
-            
+            userValueSourcesModel = $userValueSourcesModel
+            processRequest        = $true
             organizationRoles     = @()
+        }
+
+        # Add profileId only if user has no roles yet
+        if ($null -ne $ProfileID) {
+            $authorization | Add-Member -NotePropertyName "profileId" -NotePropertyValue $ProfileID
         } 
 
+        $PermissionObject.Remove("displayname")
         $authorization.organizationRoles += $PermissionObject
+
+        # Convert to JSON and encode as UTF-8
+        $authorization_json = $authorization | ConvertTo-Json -Depth 10
+
+        $headers = @{
+            'Content-Type' = 'application/json;charset=utf-8'
+            Accept         = 'application/json;odata.metadata=minimal;odata.streaming=true'
+            Authorization  = "Bearer $($accessToken)"
+        }
 
         #Send Auth request
         $splatSendAuthorization = @{
             Uri     = "$($actionContext.Configuration.BaseUrl)/authorizationrequest/V3/Authorization"
             Method  = 'POST'
-            Body    = ($authorization | ConvertTo-Json -Depth 10)
+            Body    = [System.Text.Encoding]::UTF8.GetBytes($authorization_json)
             Headers = $headers
         } 
 
-        # Make sure to test with special characters and if needed; add utf8 encoding.
         if (-not($actionContext.DryRun -eq $true)) {
             Write-Information "Granting $($actionContext.PermissionDisplayName) for AuthorizationBox account with accountReference: [$($actionContext.References.Account.userSecurityId)]"
-            $null = Invoke-RestMethod @splatSendAuthorization -Verbose:$false
+            
+            try {
+                $null = Invoke-RestMethod @splatSendAuthorization -Verbose:$false
+            }
+            catch {
+                $errorObj = Resolve-AuthorizationboxError -ErrorObject $_
+                if ($errorObj.FriendlyMessage -match 'active requests pending') {
+                    Write-Information "Pending request detected; retrying once in 5s"
+                    Start-Sleep -Seconds 5
+                    $null = Invoke-RestMethod @splatSendAuthorization -Verbose:$false
+                }
+                else {
+                    throw
+                }
+            }
         }
         else {
             Write-Information "[DryRun] Granting $($actionContext.PermissionDisplayName) for AuthorizationBox account with accountReference: [$($actionContext.References.Account.userSecurityId)], will be executed during enforcement"
@@ -178,7 +283,6 @@ try {
                 IsError = $false
             }
         )
-
     }
 
 }

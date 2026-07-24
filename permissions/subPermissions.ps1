@@ -12,8 +12,14 @@ $outputContext.Success = $false
 
 # Toggle voor AB currentpermissions or HelloID currentpermissions - Do not change later
 $useCurrentAuthAB = $false
-$DefaultCompany = ''
-$domain = 'DOMAIN\'
+$DefaultCompany = 'Mitros'
+
+# Toggle voor het automatisch doorzetten van requests.
+$ProcessRequest = $true
+
+if ($actionContext.Operation -eq "Revoke") {
+        $ProcessRequest = $true
+}
 
 # Set debug logging
 switch ($($actionContext.Configuration.isDebug)) {
@@ -37,11 +43,6 @@ if ($actionContext.CurrentPermissions.Count -gt 0) {
         }
         $currentPermissions.Add($currentPermission)
     }
-}
-
-function Remove-StringLatinCharacters {
-    PARAM ([string]$String)
-    [Text.Encoding]::ASCII.GetString([Text.Encoding]::GetEncoding("Cyrillic").GetBytes($String))
 }
 
 function Resolve-AuthorizationboxError {
@@ -154,6 +155,8 @@ try {
         Authorization  = "Bearer $($accessToken)"
     }
 
+    #write-verbose -verbose "Bearer $($accessToken)"
+
     #Convert databasename to ID
     $splatGetDatabase = @{
         Uri     = "$($actionContext.Configuration.BaseUrl)/api/v2.0/Database"
@@ -162,58 +165,87 @@ try {
     }
     $DatabaseList = (Invoke-RestMethod @splatGetDatabase -Verbose:$false) | Group-Object name -AsHashTable
     $DatabaseID = $DatabaseList[$($actionContext.Configuration.Database)].id
+    if ([string]::IsNullOrWhiteSpace([string]$DatabaseID)) {
+        throw "DatabaseID could not be resolved for database [$($actionContext.Configuration.Database)]"
+    }
+
+    # Get user to retrieve key for user data lookup
+    $filter = "?`$filter=(databaseId eq $DatabaseID and userSecurityId eq $($Account.userSecurityId))"
+    $splatGetUsers = @{
+        Uri     = "$($actionContext.Configuration.BaseUrl)/odata/v2.0/Users$($filter)"
+        Method  = 'GET'
+        Headers = $headers
+    }
+    $correlatedAccount = (Invoke-RestMethod @splatGetUsers -Verbose:$false).value | Select-Object -First 1
+
+    # Get current user data from Authorizationbox
+    if ($null -ne $correlatedAccount) {
+        Write-Information 'Retrieving current user data from Authorizationbox'
+        $splatGetUserData = @{
+            Uri     = "$($actionContext.Configuration.BaseUrl)/api/v2.0/Users/($($correlatedAccount.key))/GetUserDataForUser"
+            Method  = 'GET'
+            Headers = $headers
+        }
+
+        try {
+            $currentUserData = (Invoke-RestMethod @splatGetUserData -Verbose:$false)
+        }
+        catch {
+            Write-Warning "Could not retrieve current user data: $($_.Exception.Message)"
+            $currentUserData = $null
+        }
+    }
+    
+    ## Get roles first and fill current permissions AB, to not remove any roles that do not exist on the user
+    $splatGetRoles = @{
+        Uri     = "$($actionContext.Configuration.BaseUrl)" + '/odata/v2.0/OrgRolesPerUser?$filter=' + "databaseID eq $databaseid and userName eq '$($account.Username)'"
+        Method  = 'GET'
+        Headers = $headers
+    }
+
+    $Roles = (Invoke-RestMethod @splatGetRoles -Verbose:$false).value
+    #write-verbose -verbose ($roles | Out-string)
+
+    $currentPermissionsAB = [System.Collections.Generic.List[Object]]::new()
+    if ($Roles.count -gt 0) {
+        foreach ($entitlement in $Roles) {
+            $currentPermission = @{
+                DisplayName = $entitlement.OrganizationRoleName
+                Id          = $entitlement.OrganizationRoleCode
+                Company     = $entitlement.company
+            }
+            $currentPermissionsAB.Add($currentPermission)
+            #write-verbose -verbose ($currentPermission | out-string)
+        }
+    }
 
     ### We can use Authorizationbox as the truth for currentpermissions but be carefull with this
-    if ($useCurrentAuthAB) {
-        ## Get roles first and fill current permissions
-        $splatGetRoles = @{
-            Uri     = "$($actionContext.Configuration.BaseUrl)" + '/odata/v2.0/OrgRolesPerUser?$filter=' + "databaseID eq $databaseid and userName eq '$($account.Username)'"
-            Method  = 'GET'
-            Headers = $headers
-        }
-
-        $Roles = (Invoke-RestMethod @splatGetRoles -Verbose:$false).value
-        #write-verbose -verbose ($roles | Out-string)
-
-        $currentPermissions = [System.Collections.Generic.List[Object]]::new()
-        if ($Roles.count -gt 0) {
-            foreach ($entitlement in $Roles) {
-                $currentPermission = @{
-                    DisplayName = $entitlement.OrganizationRoleName
-                    Id          = $entitlement.OrganizationRoleCode
-                    Company     = $entitlement.company
-                }
-                $currentPermissions.Add($currentPermission)
-                #write-verbose -verbose ($currentPermission | out-string)
-            }
-        }  
-    } 
+    #if ($useCurrentAuthAB) {  
+        #$currentPermissions = $currentPermissionsAB
+    #} 
     ###
 
-    write-verbose -verbose "Current permissions" 
+    #write-verbose -verbose "Current permissions" 
     #write-verbose -verbose ($currentPermissions | out-string)
 
-    $contractsInScope = ($personContext.Person.Contracts)# | Where-Object { $_.Context.InConditions -eq $true })# 
+    $contractsInScope = ($personContext.Person.Contracts | Where-Object { $_.Context.InConditions -eq $true })# 
     if ($null -ne $contractsInScope) {
     
-        $filter = "(DatabaseID eq $databaseid and "
-        $filter += ($contractsinscope.title.name | ForEach-Object { "Name eq '$_'" }) -join " or "
-        $filter += ")"
-
-        $filter = Escape-UrlChars -inputString $filter
-
-        $splatGetOrganizationRoles = @{
-            Uri     = "https://api.2-controlware.com/odata/v2.0/OrganizationRole?`$filter=$($filter)"
-            Method  = 'GET'
-            Headers = $headers
-        }
-            
-        $organizationRoles = (Invoke-RestMethod @splatGetOrganizationRoles -Verbose:$false).value
-        #write-verbose -verbose ($organizationRoles | out-string)
-
         $desiredPermissions = [System.Collections.Generic.List[Object]]::new()
         foreach ($contract in $contractsInScope) {
             
+            $filter = "(DatabaseID eq $databaseid and Name eq '$($contract.title.name)')"
+            $filter = Escape-UrlChars -inputString $filter
+
+            $splatGetOrganizationRoles = @{
+                Uri     = "https://api.2-controlware.com/odata/v2.0/OrganizationRole?`$filter=$($filter)"
+                Method  = 'GET'
+                Headers = $headers
+            }
+            
+            $organizationRoles = (Invoke-RestMethod @splatGetOrganizationRoles -Verbose:$false).value
+            #write-verbose -verbose ($organizationRoles | out-string)
+
             if ($organizationRoles.count -eq 0) {
                 throw "Geen match gevonden met rol: $($contract.Title.Name)"
             }
@@ -264,11 +296,11 @@ try {
                 }
 
                 if ($desiredPermissionObject.organizationRoleCode.count -eq 0) {
-                    throw "Geen match gevonden met rol: $($contract.Title.Name), $($contract.Department.displayname) "
+                    throw "Geen match gevonden met rol: $($contract.Title.Name), $($contract.Department.Displayname)"
                 }
 
                 if ($desiredPermissionObject.organizationRoleCode.count -gt 1) {
-                    throw "Mogelijk zijn er meerdere rollen met dezelfde functie / afdeling combinatie: $($contract.Title.Name) , $($contract.Department.displayname)"
+                    throw "Mogelijk zijn er meerdere rollen met dezelfde functie / afdeling combinatie: $($contract.Title.Name) , $($contract.Department.Displayname)"
                 }
 
                 $desiredPermissions.Add($desiredPermissionObject)
@@ -325,7 +357,8 @@ try {
                         #startDate            = (Get-Date).ToString("yyyy-MM-ddTHH:mm:ssZ")
                         endDate              = (Get-Date).ToString("yyyy-MM-ddTHH:mm:ssZ")
                         organizationRoleCode = $permission.id
-                        company              = $permission.company
+                        #company              = $permission.company
+                        company              = $DefaultCompany
                     }
                     $permissionsToRevoke.Add($RemovePermissionObject)
                 }
@@ -342,42 +375,76 @@ try {
                 #startDate            = (Get-Date).ToString("yyyy-MM-ddTHH:mm:ssZ")
                 endDate              = (Get-Date).ToString("yyyy-MM-ddTHH:mm:ssZ")
                 organizationRoleCode = $permission.id
-                company              = $permission.company
+                #company              = $permission.company
+                company              = $DefaultCompany
             }
             $permissionsToRevoke.Add($RemovePermissionObject)
         }
     }
 
-    #Extra fields can be added here, make sure to match this with fieldmapping
-    $ExternalEmpId = $personContext.Person.Accounts.MicrosoftActiveDirectory.Mail.split('@')[0]
-    if ($ExternalEmpId.Length -gt 10) {
-        $ExternalEmpId = $ExternalEmpId.Substring(0, 10)
-    }
-
     $authorization = [PSCustomObject]@{
         securityId            = $Account.userSecurityID
         databaseId            = $DatabaseID
-        profileId             = $ProfileID
-        processRequest        = $true
-        userValueSourcesModel = [PSCustomObject]@{
-            fullName           = (Remove-StringLatinCharacters $Account.fullName)
-            companyEmail       = $personContext.Person.Accounts.MicrosoftActiveDirectory.Mail
-            email              = $personContext.Person.Accounts.MicrosoftActiveDirectory.Mail
-            employeeNoExternal = $ExternalEmpId
-            jobTitle           = (Remove-StringLatinCharacters $personContext.Person.PrimaryContract.Title.Name)
-            firstName          = (Remove-StringLatinCharacters $personContext.Person.Name.NickName)
-            middleName         = (Remove-StringLatinCharacters $personContext.Person.Name.FamilyNamePrefix)
-            surName            = (Remove-StringLatinCharacters $personContext.Person.Name.FamilyName)
-            userName           = $Account.userName
-        }
+        #profileId             = $ProfileID
+        processRequest        = $ProcessRequest
         organizationRoles     = @()
+    }
+
+    # Build userValueSourcesModel from current user data
+    if ($null -ne $currentUserData) {
+        $excludedFields = @("userSecurityId", "fullName")
+
+        # Use all fields from currentUserData
+        $userValueData = @{}
+        foreach ($field in $currentUserData) {
+            if ($excludedFields -notcontains $field.type) {
+                $userValueData[$field.type] = $field.value
+            }
+        }
+
+        $userValueSourcesModel = [PSCustomObject]@{}
+        $userValueSourcesModel | Add-Member -NotePropertyName 'fullName' -NotePropertyValue $Account.fullName
+
+        foreach ($fieldName in $userValueData.Keys) {
+            $userValueSourcesModel | Add-Member -NotePropertyName $fieldName -NotePropertyValue $userValueData[$fieldName]
+        }
+
+        $authorization | Add-Member -NotePropertyName "userValueSourcesModel" -NotePropertyValue $userValueSourcesModel
+    }
+    else {
+        Throw "No current user data available, authorization request cannot be processed"
     }
 
     if ($permissionsToRevoke) {
         # Remove permissions from the authorization
         foreach ($permission in $permissionsToRevoke) {
 
+            # Check if permission exists in AB current permissions (match on Id only; stored company may be stale/mismatched)
+            # Prefer the entry with DefaultCompany; a role can appear twice (once empty, once filled company)
+            $inABRole = $null
+            if ($currentPermissionsAB -and $currentPermissionsAB.Count -gt 0) {
+                $inABRole = $currentPermissionsAB | Where-Object { $_.Id -eq $permission.organizationRoleCode -and $_.Company -eq $DefaultCompany } | Select-Object -First 1
+                if (-not $inABRole) {
+                    $inABRole = $currentPermissionsAB | Where-Object { $_.Id -eq $permission.organizationRoleCode } | Select-Object -First 1
+                }
+            }
+
+            if (-not $inABRole) {
+                Write-Verbose "Revoke skipped; role not found in AB: [$($permission.DisplayName) / $($permission.organizationRoleCode)]"
+                $outputContext.AuditLogs.Add([PSCustomObject]@{
+                        Action  = "RevokePermission"
+                        Message = "Revoke skipped; role not found in AB: [$($permission.DisplayName)]"
+                        IsError = $false
+                    })
+                continue
+            }
+
+            # Override company with the actual value from AB to correct any stale/mismatched stored value
+            $permission['company'] = $inABRole.Company
+
             Write-Verbose "Revoking entitlement: [$($permission.DisplayName)]"
+
+
             $outputContext.AuditLogs.Add([PSCustomObject]@{
                     Action  = "RevokePermission"
                     Message = "Revoked access from: [$($permission.DisplayName)]"
@@ -386,6 +453,7 @@ try {
 
             $permission.Remove("displayname")
             $authorization.organizationRoles += $permission
+
         }
     }
     else {
@@ -402,6 +470,22 @@ try {
         foreach ($permission in $permissionsToGrant) {
 
             Write-Verbose "Granting entitlement: [$($permission.DisplayName)]"
+
+            # Sla grant over als de rol al in Authorization Box staat
+            $alreadyInAB = $false
+            if ($currentPermissionsAB -and $currentPermissionsAB.Count -gt 0) {
+
+                $alreadyInAB = $null -ne ($currentPermissionsAB | Where-Object {
+                        $_.Id -eq $permission.organizationRoleCode -and (
+                            [string]::IsNullOrEmpty($permission.company) -or $_.Company -eq $permission.company
+                        )
+                    })
+            }
+
+            if ($alreadyInAB) {
+                continue
+            }
+
             $outputContext.AuditLogs.Add([PSCustomObject]@{
                     Action  = "GrantPermission"
                     Message = "Granted access to: [$($permission.DisplayName)]"
@@ -422,30 +506,60 @@ try {
             })
     }
 
-    #write-verbose -verbose $($authorization | out-string)
+
+
     if ($authorization.organizationRoles.count -gt 0) {
         if (-not ($actionContext.DryRun -eq $true)) {
            
             try {
             
+                #tmp
+                $authorization_json = ($authorization | ConvertTo-Json -Depth 10)
+                $headers = @{
+                    'Content-Type' = 'application/json;charset=utf-8'
+                    Accept         = 'application/json;odata.metadata=minimal;odata.streaming=true'
+                    Authorization  = "Bearer $($accessToken)"
+                }
+
                 #Send Auth request
                 $splatUpdateAuthorization = @{
                     Uri     = "$($actionContext.Configuration.BaseUrl)/authorizationrequest/V3/Authorization"
                     Method  = 'POST'
-                    Body    = ($authorization | ConvertTo-Json -Depth 10)
+                    #Body    = ($authorization | ConvertTo-Json -Depth 10)
+                    Body    = [System.Text.Encoding]::UTF8.GetBytes($authorization_json)
                     Headers = $headers
                 } 
 
-                $null = Invoke-RestMethod @splatUpdateAuthorization -Verbose:$false
+                #write-information ($authorization | ConvertTo-Json -depth 10)
+                #write-information ($authorization.organizationRoles | out-string)
+
+                # Single retry for transient "active requests pending" condition
+                try {
+                    $null = Invoke-RestMethod @splatUpdateAuthorization -Verbose:$false
+                }
+                catch {
+                    $errorObj = Resolve-AuthorizationboxError -ErrorObject $_
+                    $errText = $($errorObj.FriendlyMessage)
+                    
+                    if ($errText -match 'active requests pending') {
+                        Write-Information "Pending request detected; retrying once in 10s"
+                        Start-Sleep -Seconds 10
+                        # Second attempt; any failure bubbles to outer catch
+                        $null = Invoke-RestMethod @splatUpdateAuthorization -Verbose:$false
+                    }
+                    else {
+                        throw
+                    }
+                }
 
                 $outputContext.AuditLogs.Add([PSCustomObject]@{
-                        Message = "Authorizatie succesvol verzonden"
+                        Message = "Authorisatie succesvol verzonden"
                         IsError = $false
                     })
             }
             catch {
-                $ex = $PSItem
-                throw "Mislukt om een authorizatieverzoek te maken. Error: $($ex.Exception.Message)"
+                $errorObj = Resolve-AuthorizationboxError -ErrorObject $_
+                throw "Mislukt om een authorisatieverzoek te maken. Error: $($errorObj.FriendlyMessage)"
             }
         }
     }
