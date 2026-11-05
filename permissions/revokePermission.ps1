@@ -6,18 +6,13 @@
 # Enable TLS1.2
 [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor [System.Net.SecurityProtocolType]::Tls12
 
-# Set to false at start, at the end, only when no error occurs it is set to true
-$outputContext.Success = $false 
-
-# Set variables, as data is not available in permissions
-$DefaultCompany = 'Company'
+# Parameters for determining the company or company group of the role, as this data is not available in permissions.
+# When $UseCompanyGroup is $true, $DefaultCompany contains the name of the company group.
+# Use the same values as in the grant script.
+$DefaultCompany = ''
+$UseCompanyGroup = $false
 
 #region functions
-function Remove-StringLatinCharacters {
-    PARAM ([string]$String)
-    [Text.Encoding]::ASCII.GetString([Text.Encoding]::GetEncoding("Cyrillic").GetBytes($String))
-}
-
 function Resolve-AuthorizationboxError {
     [CmdletBinding()]
     param (
@@ -91,7 +86,7 @@ try {
     Write-Verbose 'Getting Access Token' -Verbose
     $accessToken = Get-AccessToken
     $headers = @{
-        'Content-Type' = 'application/json'
+        'Content-Type' = 'application/json;charset=utf-8'
         Accept         = 'application/json;odata.metadata=minimal;odata.streaming=true'
         Authorization  = "Bearer $($accessToken)"
     }
@@ -104,10 +99,58 @@ try {
     }
     $DatabaseList = (Invoke-RestMethod @splatGetDatabase -Verbose:$false) | Group-Object name -AsHashTable
     $DatabaseID = $DatabaseList[$($actionContext.Configuration.Database)].id
-    #
+    if ([string]::IsNullOrWhiteSpace([string]$DatabaseID)) {
+        throw "DatabaseID could not be resolved for database [$($actionContext.Configuration.Database)]"
+    }
 
+    if ($UseCompanyGroup) {
+        $groupName = $DefaultCompany.Replace("'", "''")
+        $groupFilter = [uri]::EscapeDataString("(databaseId eq $DatabaseID and name eq '$groupName')")
+        $splatGetCompanyGroups = @{
+            Uri     = "$($actionContext.Configuration.BaseUrl)/odata/v2.0/CompanyGroups?`$filter=$groupFilter"
+            Method  = 'GET'
+            Headers = $headers
+        }
+        $companyGroups = @((Invoke-RestMethod @splatGetCompanyGroups -Verbose:$false).value)
+        if ($companyGroups.Count -ne 1 -or [string]::IsNullOrWhiteSpace([string]$companyGroups[0].key)) {
+            throw "Expected one companyGroup for [$DefaultCompany] in database [$DatabaseID]"
+        }
+        $companyGroupId = $companyGroups[0].key
+    }
+
+    # Get user to retrieve key for user data lookup
+    $filter = "?`$filter=(databaseId eq $DatabaseID and userSecurityId eq $($actionContext.References.Account.userSecurityId))"
+    $splatGetUsers = @{
+        Uri     = "$($actionContext.Configuration.BaseUrl)/odata/v2.0/Users$($filter)"
+        Method  = 'GET'
+        Headers = $headers
+    }
+    $correlatedAccount = (Invoke-RestMethod @splatGetUsers -Verbose:$false).value | Select-Object -First 1
+    if ([string]::IsNullOrWhiteSpace([string]$correlatedAccount.key)) {
+        throw "Authorizationbox user could not be resolved for securityId [$($actionContext.References.Account.userSecurityId)]"
+    }
+
+    # Get current user data from Authorizationbox
+    if ($null -ne $correlatedAccount) {
+        Write-Information 'Retrieving current user data from Authorizationbox'
+        $splatGetUserData = @{
+            Uri     = "$($actionContext.Configuration.BaseUrl)/api/v2.0/Users/($($correlatedAccount.key))/GetUserDataForUser"
+            Method  = 'GET'
+            Headers = $headers
+        }
+        
+        try {
+            $currentUserData = (Invoke-RestMethod @splatGetUserData -Verbose:$false)
+        }
+        catch {
+            Write-Warning "Could not retrieve current user data: $($_.Exception.Message)"
+            $currentUserData = $null
+        }
+    }
+
+    ## Get roles to check if permission exists
     $splatGetRoles = @{
-        Uri     = "$($actionContext.Configuration.BaseUrl)" + '/odata/v2.0/OrgRolesPerUser?$filter=' + "databaseID eq $databaseid and userCode eq $($actionContext.References.Account.userSecurityId)"
+        Uri     = "$($actionContext.Configuration.BaseUrl)/odata/v2.0/OrgRolesPerUser?`$filter=databaseID eq $DatabaseID and userCode eq $($correlatedAccount.key)"
         Method  = 'GET'
         Headers = $headers
     }
@@ -120,54 +163,107 @@ try {
             $currentPermission = @{
                 DisplayName = $entitlement.OrganizationRoleName
                 Id          = $entitlement.OrganizationRoleCode
-                Company     = $entitlement.company
+                Company      = $entitlement.company
+                CompanyGroup = $entitlement.companyGroupCode
             }
             $currentPermissions.Add($currentPermission)
-
         }
-    }  
-
-    #write-verbose -verbose "Current permissions" 
-    #write-verbose -verbose ($currentPermissions | out-string)
+    }
 
     $PermissionObject = @{
         status               = "Revoke"
         displayname          = $($actionContext.PermissionDisplayName)
-        startDate            = (Get-Date).ToString("yyyy-MM-ddTHH:mm:ssZ")
-        #endDate              = (Get-Date "2099-12-31T23:59:59").ToString("yyyy-MM-ddTHH:mm:ssZ")
+        endDate              = (Get-Date).ToString("yyyy-MM-ddTHH:mm:ssZ")
         organizationRoleCode = $($actionContext.References.Permission.id)
-        company              = $($actionContext.References.Permission.company)
+    }
+    if ($UseCompanyGroup) {
+        $PermissionObject.companyGroup = $companyGroupId
+    }
+    else {
+        $PermissionObject.company = $DefaultCompany
     }
 
-    if ($currentPermissions.ContainsValue($($PermissionObject.organizationRoleCode))) {
+    # Revoke only the role for the configured company or company group
+    $inABRole = $null
+    if ($currentPermissions -and $currentPermissions.Count -gt 0) {
+        $inABRole = $currentPermissions | Where-Object {
+            $_.Id -eq $PermissionObject.organizationRoleCode -and (
+                (-not [string]::IsNullOrEmpty([string]$PermissionObject.companyGroup) -and [string]$_.CompanyGroup -eq [string]$PermissionObject.companyGroup) -or
+                ([string]::IsNullOrEmpty([string]$PermissionObject.companyGroup) -and [string]::IsNullOrEmpty([string]$_.CompanyGroup) -and [string]$_.Company -eq [string]$PermissionObject.company)
+            )
+        } | Select-Object -First 1
+    }
+
+    if (-not $inABRole) {
+        Write-Information "Revoke skipped; role and scope not found in AB: [$($actionContext.PermissionDisplayName) / $($PermissionObject.organizationRoleCode) / $($PermissionObject.company)$($PermissionObject.companyGroup)]"
+        $outputContext.AuditLogs.Add([PSCustomObject]@{
+                Message = "Revoke skipped; role and scope not found in AB: [$($actionContext.PermissionDisplayName) / $($PermissionObject.company)$($PermissionObject.companyGroup)]"
+                IsError = $false
+            })
+    }
+    else {
+        # Build userValueSourcesModel from current user data
+        if ($null -ne $currentUserData) {
+            $excludedFields = @("userSecurityId", "fullName")
+            
+            # Use all fields from currentUserData
+            $userValueData = @{}
+            foreach ($field in $currentUserData) {
+                if ($excludedFields -notcontains $field.type) {
+                    $userValueData[$field.type] = $field.value
+                }
+            }
+
+            $userValueSourcesModel = [PSCustomObject]@{}
+            $userValueSourcesModel | Add-Member -NotePropertyName 'fullName' -NotePropertyValue $($actionContext.References.Account.FullName)
+            
+            foreach ($fieldName in $userValueData.Keys) {
+                $userValueSourcesModel | Add-Member -NotePropertyName $fieldName -NotePropertyValue $userValueData[$fieldName]
+            }
+        }
+        else {
+            Throw "No current user data available, authorization request cannot be processed"
+        }
         
-        #Extra fields can be added here
         $authorization = [PSCustomObject]@{
             securityId            = $($actionContext.References.Account.userSecurityId)
             databaseId            = $DatabaseID
-        
-            userValueSourcesModel = [PSCustomObject]@{
-                userName = $($actionContext.References.Account.userName)
-                fullName   = (Remove-StringLatinCharacters $($actionContext.References.Account.DisplayName)) #<- Might be required
-            }
-            
+            userValueSourcesModel = $userValueSourcesModel
+            processRequest        = $true
             organizationRoles     = @()
-        } 
+        }
 
+        $PermissionObject.Remove("displayname")
         $authorization.organizationRoles += $PermissionObject
+
+        # Convert to JSON and encode as UTF-8
+        $authorization_json = $authorization | ConvertTo-Json -Depth 10
 
         #Send Auth request
         $splatSendAuthorization = @{
             Uri     = "$($actionContext.Configuration.BaseUrl)/authorizationrequest/V3/Authorization"
             Method  = 'POST'
-            Body    = ($authorization | ConvertTo-Json -Depth 10)
+            Body    = [System.Text.Encoding]::UTF8.GetBytes($authorization_json)
             Headers = $headers
         } 
 
-        # Make sure to test with special characters and if needed; add utf8 encoding.
         if (-not($actionContext.DryRun -eq $true)) {
             Write-Information "Revoking $($actionContext.PermissionDisplayName) for AuthorizationBox account with accountReference: [$($actionContext.References.Account.userSecurityId)]"
-            $null = Invoke-RestMethod @splatSendAuthorization -Verbose:$false
+            
+            try {
+                $null = Invoke-RestMethod @splatSendAuthorization -Verbose:$false
+            }
+            catch {
+                $errorObj = Resolve-AuthorizationboxError -ErrorObject $_
+                if ($errorObj.FriendlyMessage -match 'active requests pending') {
+                    Write-Information "Pending request detected; retrying once in 5s"
+                    Start-Sleep -Seconds 5
+                    $null = Invoke-RestMethod @splatSendAuthorization -Verbose:$false
+                }
+                else {
+                    throw
+                }
+            }
         }
         else {
             Write-Information "[DryRun] Revoking $($actionContext.PermissionDisplayName) for AuthorizationBox account with accountReference: [$($actionContext.References.Account.userSecurityId)], will be executed during enforcement"
@@ -178,7 +274,6 @@ try {
                 IsError = $false
             }
         )
-
     }
 
 }
@@ -195,7 +290,7 @@ catch {
     }
 
     $outputContext.AuditLogs.Add([PSCustomObject]@{
-            Message = "Error in proces: $($ex.Exception.Message)"
+            Message = "Error in process: $($ex.Exception.Message)"
             IsError = $true
         })
 }
