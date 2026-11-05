@@ -80,7 +80,7 @@ try {
     $accessToken = Get-AccessToken
         
     $headers = @{
-        'Content-Type' = 'application/json'
+        'Content-Type' = 'application/json;charset=utf-8'
         Accept         = 'application/json;odata.metadata=minimal;odata.streaming=true'
         Authorization  = "Bearer $($accessToken)"
     }
@@ -91,8 +91,6 @@ try {
     # Define correlation
     $correlationField = $actionContext.CorrelationConfiguration.accountField
     $correlationValue = $actionContext.CorrelationConfiguration.personFieldValue
-
-    #Write-Information "$correlationField - $correlationValue"
 
     # In V3 we need to convert the database name to a database ID
     $splatGetDatabase = @{
@@ -111,7 +109,6 @@ try {
         
         #Get user (If no results are returned, try getting users without the filter)
         $filter = "?`$filter=(databaseId eq $DatabaseID and $correlationField eq $correlationValue)"
-        write-verbose -verbose ($filter | out-string)
 
         $splatGetUsers = @{
             Uri     = "$($actionContext.Configuration.BaseUrl)/odata/v2.0/Users$($filter)"
@@ -128,7 +125,7 @@ try {
         
     }
     else {
-        Write-Error "Correlation is required, please configure this in the connector"
+        throw "Correlation is required, please configure this in the connector"
     }
 
     if ($User) {
@@ -173,17 +170,11 @@ try {
 
                 # Convert authorization object to JSON with UTF-8 encoding
                 $authorization_json = ($authorization | ConvertTo-Json -Depth 10)
-                $headers = @{
-                    'Content-Type' = 'application/json;charset=utf-8'
-                    Accept         = 'application/json;odata.metadata=minimal;odata.streaming=true'
-                    Authorization  = "Bearer $($accessToken)"
-                }
 
                 #Send Auth request
                 $splatSendAuthorization = @{
                     Uri     = "$($actionContext.Configuration.BaseUrl)/authorizationrequest/V3/Authorization"
                     Method  = 'POST'
-                    #Body    = ($authorization | ConvertTo-Json -Depth 10)
                     Body    = [System.Text.Encoding]::UTF8.GetBytes($authorization_json)
                     Headers = $headers
                 } 

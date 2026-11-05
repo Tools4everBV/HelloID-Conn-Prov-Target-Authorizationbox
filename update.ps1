@@ -6,9 +6,6 @@
 # Enable TLS1.2
 [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor [System.Net.SecurityProtocolType]::Tls12
 
-#Used for when using a full update.
-#$AlwaysSendAutorisationRequest = $true
-
 #region functions
 function Resolve-AuthorizationboxError {
     [CmdletBinding()]
@@ -88,7 +85,7 @@ try {
     $accessToken = Get-AccessToken
         
     $headers = @{
-        'Content-Type' = 'application/json'
+        'Content-Type' = 'application/json;charset=utf-8'
         Accept         = 'application/json;odata.metadata=minimal;odata.streaming=true'
         Authorization  = "Bearer $($accessToken)"
     }
@@ -145,7 +142,6 @@ try {
                 }
 
                 if ($currentValue -ne $newValue) {
-                    Write-Verbose -verbose "Change detected in field '$($property.Name)': Current='$currentValue', New='$newValue'"
                     $hasChanges = $true
                 }
             }
@@ -166,11 +162,6 @@ try {
     #Never send an authorizationrequest after create. Will return an error as user has pending requests
     if($actionContext.AccountCorrelated -eq $true){
         $action = 'NoChanges'
-    }
-
-    #Used as parameter to force an authorizationrequest on 'Force update' button.
-    if($AlwaysSendAutorisationRequest -eq $true){
-        $action = 'UpdateAccount'
     }
 
     # Process
@@ -211,17 +202,11 @@ try {
 
             # Convert authorization object to JSON with UTF-8 encoding
             $authorization_json = ($authorization | ConvertTo-Json -Depth 10)
-            $headers = @{
-                'Content-Type' = 'application/json;charset=utf-8'
-                Accept         = 'application/json;odata.metadata=minimal;odata.streaming=true'
-                Authorization  = "Bearer $($accessToken)"
-            }
 
             #Send Auth request
             $splatSendAuthorization = @{
                 Uri     = "$($actionContext.Configuration.BaseUrl)/authorizationrequest/V3/Authorization"
                 Method  = 'POST'
-                #Body    = ($authorization | ConvertTo-Json -Depth 10)
                 Body    = [System.Text.Encoding]::UTF8.GetBytes($authorization_json)
                 Headers = $headers
             } 

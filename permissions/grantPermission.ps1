@@ -3,17 +3,14 @@
 # PowerShell V2
 ############################################################
 
-#$actionContext.DryRun = $false
-
 # Enable TLS1.2
 [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor [System.Net.SecurityProtocolType]::Tls12
 
-# Set to false at start, at the end, only when no error occurs it is set to true
-$outputContext.Success = $false 
-
-# Set variables, as data is not available in permissions
+# Parameters for determining the company or company group of the role, as this data is not available in permissions.
+# When $UseCompanyGroup is $true, $DefaultCompany contains the name of the company group.
 # Be sure to not change this later as this may cause bad requests in Authorizationbox
 $DefaultCompany = ''
+$UseCompanyGroup = $false
 
 #region functions
 function Resolve-AuthorizationboxError {
@@ -89,7 +86,7 @@ try {
     Write-Verbose 'Getting Access Token' -Verbose
     $accessToken = Get-AccessToken
     $headers = @{
-        'Content-Type' = 'application/json'
+        'Content-Type' = 'application/json;charset=utf-8'
         Accept         = 'application/json;odata.metadata=minimal;odata.streaming=true'
         Authorization  = "Bearer $($accessToken)"
     }
@@ -102,7 +99,24 @@ try {
     }
     $DatabaseList = (Invoke-RestMethod @splatGetDatabase -Verbose:$false) | Group-Object name -AsHashTable
     $DatabaseID = $DatabaseList[$($actionContext.Configuration.Database)].id
-    #
+    if ([string]::IsNullOrWhiteSpace([string]$DatabaseID)) {
+        throw "DatabaseID could not be resolved for database [$($actionContext.Configuration.Database)]"
+    }
+
+    if ($UseCompanyGroup) {
+        $groupName = $DefaultCompany.Replace("'", "''")
+        $groupFilter = [uri]::EscapeDataString("(databaseId eq $DatabaseID and name eq '$groupName')")
+        $splatGetCompanyGroups = @{
+            Uri     = "$($actionContext.Configuration.BaseUrl)/odata/v2.0/CompanyGroups?`$filter=$groupFilter"
+            Method  = 'GET'
+            Headers = $headers
+        }
+        $companyGroups = @((Invoke-RestMethod @splatGetCompanyGroups -Verbose:$false).value)
+        if ($companyGroups.Count -ne 1 -or [string]::IsNullOrWhiteSpace([string]$companyGroups[0].key)) {
+            throw "Expected one companyGroup for [$DefaultCompany] in database [$DatabaseID]"
+        }
+        $companyGroupId = $companyGroups[0].key
+    }
 
     # Get user to retrieve key for user data lookup
     $filter = "?`$filter=(databaseId eq $DatabaseID and userSecurityId eq $($actionContext.References.Account.userSecurityId))"
@@ -112,6 +126,9 @@ try {
         Headers = $headers
     }
     $correlatedAccount = (Invoke-RestMethod @splatGetUsers -Verbose:$false).value | Select-Object -First 1
+    if ([string]::IsNullOrWhiteSpace([string]$correlatedAccount.key)) {
+        throw "Authorizationbox user could not be resolved for securityId [$($actionContext.References.Account.userSecurityId)]"
+    }
 
     # Get current user data from Authorizationbox
     if ($null -ne $correlatedAccount) {
@@ -133,13 +150,12 @@ try {
 
     ## Get roles first and fill current permissions AB
     $splatGetRoles = @{
-        Uri     = "$($actionContext.Configuration.BaseUrl)" + '/odata/v2.0/OrgRolesPerUser?$filter=' + "databaseID eq $databaseid and userName eq '$($actionContext.References.Account.Username)'"
+        Uri     = "$($actionContext.Configuration.BaseUrl)/odata/v2.0/OrgRolesPerUser?`$filter=databaseID eq $DatabaseID and userCode eq $($correlatedAccount.key)"
         Method  = 'GET'
         Headers = $headers
     }
 
     $Roles = (Invoke-RestMethod @splatGetRoles -Verbose:$false).value
-   
 
     $currentPermissions = [System.Collections.Generic.List[Object]]::new()
     if ($Roles.count -gt 0) {
@@ -147,39 +163,41 @@ try {
             $currentPermission = @{
                 DisplayName = $entitlement.OrganizationRoleName
                 Id          = $entitlement.OrganizationRoleCode
-                Company     = $entitlement.company
+                Company      = $entitlement.company
+                CompanyGroup = $entitlement.companyGroupCode
             }
             $currentPermissions.Add($currentPermission)
-
         }
-    }  
-
-    write-verbose -verbose "Current permissions" 
-    write-verbose -verbose ($currentPermissions | out-string)
+    }
 
     $PermissionObject = @{
         status               = "Assign"
         displayname          = $($actionContext.PermissionDisplayName)
         startDate            = (Get-Date).ToString("yyyy-MM-ddTHH:mm:ssZ")
-        #endDate              = (Get-Date "2099-12-31T23:59:59").ToString("yyyy-MM-ddTHH:mm:ssZ")
         organizationRoleCode = $($actionContext.References.Permission.id)
-        company              = $DefaultCompany
+    }
+    if ($UseCompanyGroup) {
+        $PermissionObject.companyGroup = $companyGroupId
+    }
+    else {
+        $PermissionObject.company = $DefaultCompany
     }
 
-    # Check if permission already exists
+    # Skip the grant if the role already exists in Authorizationbox for the same company or company group
     $alreadyInAB = $false
     if ($currentPermissions -and $currentPermissions.Count -gt 0) {
         $alreadyInAB = $null -ne ($currentPermissions | Where-Object {
                 $_.Id -eq $PermissionObject.organizationRoleCode -and (
-                    [string]::IsNullOrEmpty($PermissionObject.company) -or $_.Company -eq $PermissionObject.company
+                    (-not [string]::IsNullOrEmpty([string]$PermissionObject.companyGroup) -and [string]$_.CompanyGroup -eq [string]$PermissionObject.companyGroup) -or
+                    ([string]::IsNullOrEmpty([string]$PermissionObject.companyGroup) -and [string]::IsNullOrEmpty([string]$_.CompanyGroup) -and [string]$_.Company -eq [string]$PermissionObject.company)
                 )
             })
     }
 
     if ($alreadyInAB) {
-        Write-Information "Grant skipped; role already exists in AuhorizationBox: [$($actionContext.PermissionDisplayName) / $($PermissionObject.organizationRoleCode)]"
+        Write-Information "Grant skipped; role and scope already exist in Authorizationbox: [$($actionContext.PermissionDisplayName) / $($PermissionObject.organizationRoleCode) / $($PermissionObject.company)$($PermissionObject.companyGroup)]"
         $outputContext.AuditLogs.Add([PSCustomObject]@{
-                Message = "Grant skipped; role already exists in AuhorizationBox: [$($actionContext.PermissionDisplayName)]"
+                Message = "Grant skipped; role and scope already exist in Authorizationbox: [$($actionContext.PermissionDisplayName) / $($PermissionObject.company)$($PermissionObject.companyGroup)]"
                 IsError = $false
             })
     }
@@ -188,12 +206,15 @@ try {
         $ProfileID = $null
         if ($currentPermissions.Count -eq 0) {
             Write-Information 'User has no roles yet, retrieving profileId from organizationRole'
+            # Same query as the permissions script; the role is selected on its key afterwards
             $splatGetOrgRole = @{
-                Uri     = "$($actionContext.Configuration.BaseUrl)/odata/v2.0/OrganizationRole?/$($actionContext.References.Permission.id)"
+                Uri     = "$($actionContext.Configuration.BaseUrl)/odata/v2.0/OrganizationRole?`$filter=databaseID eq $DatabaseID"
                 Method  = 'GET'
                 Headers = $headers
             }
-            $orgRole = (Invoke-RestMethod @splatGetOrgRole -Verbose:$false).value | Select-Object -First 1
+            $orgRole = (Invoke-RestMethod @splatGetOrgRole -Verbose:$false).value |
+                Where-Object { [string]$_.Key -eq [string]$actionContext.References.Permission.id } |
+                Select-Object -First 1
             if ($null -ne $orgRole) {
                 $ProfileID = $orgRole.ProfileId
                 Write-Information "ProfileId retrieved: $ProfileID"
@@ -241,12 +262,6 @@ try {
 
         # Convert to JSON and encode as UTF-8
         $authorization_json = $authorization | ConvertTo-Json -Depth 10
-
-        $headers = @{
-            'Content-Type' = 'application/json;charset=utf-8'
-            Accept         = 'application/json;odata.metadata=minimal;odata.streaming=true'
-            Authorization  = "Bearer $($accessToken)"
-        }
 
         #Send Auth request
         $splatSendAuthorization = @{
@@ -299,7 +314,7 @@ catch {
     }
 
     $outputContext.AuditLogs.Add([PSCustomObject]@{
-            Message = "Error in proces: $($ex.Exception.Message)"
+            Message = "Error in process: $($ex.Exception.Message)"
             IsError = $true
         })
 }

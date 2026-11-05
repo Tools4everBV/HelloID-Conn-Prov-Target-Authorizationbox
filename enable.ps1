@@ -85,7 +85,7 @@ try {
     $accessToken = Get-AccessToken
         
     $headers = @{
-        'Content-Type' = 'application/json'
+        'Content-Type' = 'application/json;charset=utf-8'
         Accept         = 'application/json;odata.metadata=minimal;odata.streaming=true'
         Authorization  = "Bearer $($accessToken)"
     }
@@ -171,17 +171,11 @@ try {
 
             # Convert authorization object to JSON with UTF-8 encoding
             $authorization_json = ($authorization | ConvertTo-Json -Depth 10)
-            $headers = @{
-                'Content-Type' = 'application/json;charset=utf-8'
-                Accept         = 'application/json;odata.metadata=minimal;odata.streaming=true'
-                Authorization  = "Bearer $($accessToken)"
-            }
 
             #Send Auth request
             $splatSendAuthorization = @{
                 Uri     = "$($actionContext.Configuration.BaseUrl)/authorizationrequest/V3/Authorization"
                 Method  = 'POST'
-                #Body    = ($authorization | ConvertTo-Json -Depth 10)
                 Body    = [System.Text.Encoding]::UTF8.GetBytes($authorization_json)
                 Headers = $headers
             } 

@@ -85,7 +85,7 @@ try {
     $accessToken = Get-AccessToken
         
     $headers = @{
-        'Content-Type' = 'application/json'
+        'Content-Type' = 'application/json;charset=utf-8'
         Accept         = 'application/json;odata.metadata=minimal;odata.streaming=true'
         Authorization  = "Bearer $($accessToken)"
     }
@@ -169,56 +169,13 @@ try {
                 Throw "Could not retrieve current user data: $($_.Exception.Message)."
             }
 
-            <# Delete all roles - Example
-            $splatGetRoles = @{
-                Uri     = "$($actionContext.Configuration.BaseUrl)" + "/odata/v2.0/OrgRolesPerUser?`$filter=(databaseId eq $DatabaseID and userCode eq $($correlatedAccount.key))"    
-                Method  = 'GET'
-                Headers = $headers
-            }
-
-            $Roles = (Invoke-RestMethod @splatGetRoles -Verbose:$false).value
-
-            $currentPermissions = [System.Collections.Generic.List[Object]]::new()
-            if ($Roles.count -gt 0) {
-                foreach ($entitlement in $Roles) {
-                    $currentPermission = @{
-                        DisplayName = $entitlement.OrganizationRoleName
-                        Id          = $entitlement.OrganizationRoleCode
-                        Company     = $entitlement.company
-                    }
-                    $currentPermissions.Add($currentPermission)
-                }
-            }  
-
-            foreach ($permission in $currentPermissions) {
-                    $RemovePermissionObject = @{
-                        status               = "Revoke"
-                        displayname          = $permission.displayname
-                        #startDate            = (Get-Date).ToString("yyyy-MM-ddTHH:mm:ssZ")
-                        endDate              = (Get-Date).AddDays(-1).ToString('yyyy-MM-ddTHH:mm:ssZ')
-                        organizationRoleCode = $permission.id
-                        company              = $permission.company
-                    }
-
-                    $authorization.organizationRoles += $RemovePermissionObject
-            }
-            #>
-
-            #write-verbose -verbose ($authorization | ConvertTo-Json -Depth 10)
-
             # Convert authorization object to JSON with UTF-8 encoding
             $authorization_json = ($authorization | ConvertTo-Json -Depth 10)
-            $headers = @{
-                'Content-Type' = 'application/json;charset=utf-8'
-                Accept         = 'application/json;odata.metadata=minimal;odata.streaming=true'
-                Authorization  = "Bearer $($accessToken)"
-            }
 
             #Send Auth request
             $splatSendAuthorization = @{
                 Uri     = "$($actionContext.Configuration.BaseUrl)/authorizationrequest/V3/Authorization"
                 Method  = 'POST'
-                #Body    = ($authorization | ConvertTo-Json -Depth 10)
                 Body    = [System.Text.Encoding]::UTF8.GetBytes($authorization_json)
                 Headers = $headers
             } 

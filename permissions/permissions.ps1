@@ -6,9 +6,6 @@
 # Enable TLS1.2
 [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor [System.Net.SecurityProtocolType]::Tls12
 
-# Set to false at start, at the end, only when no error occurs it is set to true
-$outputContext.Success = $false 
-
 #region functions
 function Resolve-AuthorizationboxError {
     [CmdletBinding()]
@@ -96,6 +93,9 @@ try {
     }
     $DatabaseList = (Invoke-RestMethod @splatGetDatabase -Verbose:$false) | Group-Object name -AsHashTable
     $DatabaseID = $DatabaseList[$($actionContext.Configuration.Database)].id
+    if ([string]::IsNullOrWhiteSpace([string]$DatabaseID)) {
+        throw "DatabaseID could not be resolved for database [$($actionContext.Configuration.Database)]"
+    }
 
     # Might need paging
     $splatGetOrganizationRoles = @{
@@ -139,7 +139,7 @@ catch {
     }
 
     $outputContext.AuditLogs.Add([PSCustomObject]@{
-            Message = "Error in proces: $($ex.Exception.Message)"
+            Message = "Error in process: $($ex.Exception.Message)"
             IsError = $true
         })
 }

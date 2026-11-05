@@ -88,17 +88,21 @@ You can import the field mapping using the `fieldMapping.json` file. `FullName` 
 
 ### Account Reference
 
-Store the combined reference required by Authorizationbox/DynamicsEmpire (for example: `SecurityID|FullName|Username`). Changing this after correlation can break Authorizationbox request logic.
+The account reference is set during create/correlate and contains `userSecurityId`, `fullName` and `userName`. All scripts look up the Authorizationbox user by the immutable `userSecurityId`. Changing the reference after correlation can break Authorizationbox request logic.
 
 ## Remarks
 
 - Authorizationbox processes authorizations via requests that can be approved or denied; only one request can be open at a time. In standard usage, HelloID submits requests with `ProcessRequest = $True` so they are automatically processed. If you set this to false, you may encounter errors in HelloID when another request is still open.
 
+- The company or company group of a role is set with `$DefaultCompany` and `$UseCompanyGroup` at the top of the grant, revoke and sub-permissions scripts. When `$UseCompanyGroup` is `$true`, `$DefaultCompany` contains the name of the company group. Use the same values in all scripts and do not change them after go-live: grant and revoke only match roles in Authorizationbox on the same company or company group.
+
 - If functions are only present once in Authorizationbox, subpermissions will only match on title. If multiple titles are found, department is also needed for a match. 
 
-- In the Disable step, an example is added for removing roles. In the Delete step, the user is closed (not hard-deleted). Fully deleting users can cause issues in DynamicsEmpire; therefore, we disable users instead. Hard deletion is possible but may cause problems during reboarding.
+- The Disable step does not remove roles from the user. If roles must be removed on disable, add this to the disable script yourself and take the `company` / `companyGroup` scope of each role into account (see the sub-permissions script).
 
-- Be carefull when updating employeeNoExternal as this can cause new users to appear in Empire.
+- In the Delete step, the user is closed (not hard-deleted) by sending the same request as the Disable step. Fully deleting users can cause issues in DynamicsEmpire; therefore, we disable users instead. Hard deletion is possible but may cause problems during reboarding. The Delete action is usually not used in Authorizationbox implementations; be sure to check whether it is needed in your implementation.
+
+- Be careful when updating employeeNoExternal as this can cause new users to appear in Empire.
 
 ### Creation/correlation via Business Central
 
