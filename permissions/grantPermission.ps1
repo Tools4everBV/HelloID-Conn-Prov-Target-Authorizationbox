@@ -116,6 +116,8 @@ try {
             throw "Expected one companyGroup for [$DefaultCompany] in database [$DatabaseID]"
         }
         $companyGroupId = $companyGroups[0].key
+        # Authorizationbox may return the key or the code of the company group in companyGroupCode; accept both when comparing
+        $companyGroupMatchValues = @([string]$companyGroups[0].key, [string]$companyGroups[0].code) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
     }
 
     # Get user to retrieve key for user data lookup
@@ -131,21 +133,19 @@ try {
     }
 
     # Get current user data from Authorizationbox
-    if ($null -ne $correlatedAccount) {
-        Write-Information 'Retrieving current user data from Authorizationbox'
-        $splatGetUserData = @{
-            Uri     = "$($actionContext.Configuration.BaseUrl)/api/v2.0/Users/($($correlatedAccount.key))/GetUserDataForUser"
-            Method  = 'GET'
-            Headers = $headers
-        }
-        
-        try {
-            $currentUserData = (Invoke-RestMethod @splatGetUserData -Verbose:$false)
-        }
-        catch {
-            Write-Warning "Could not retrieve current user data: $($_.Exception.Message)"
-            $currentUserData = $null
-        }
+    Write-Information 'Retrieving current user data from Authorizationbox'
+    $splatGetUserData = @{
+        Uri     = "$($actionContext.Configuration.BaseUrl)/api/v2.0/Users/($($correlatedAccount.key))/GetUserDataForUser"
+        Method  = 'GET'
+        Headers = $headers
+    }
+
+    try {
+        $currentUserData = (Invoke-RestMethod @splatGetUserData -Verbose:$false)
+    }
+    catch {
+        Write-Warning "Could not retrieve current user data: $($_.Exception.Message)"
+        $currentUserData = $null
     }
 
     ## Get roles first and fill current permissions AB
@@ -188,7 +188,7 @@ try {
     if ($currentPermissions -and $currentPermissions.Count -gt 0) {
         $alreadyInAB = $null -ne ($currentPermissions | Where-Object {
                 $_.Id -eq $PermissionObject.organizationRoleCode -and (
-                    (-not [string]::IsNullOrEmpty([string]$PermissionObject.companyGroup) -and [string]$_.CompanyGroup -eq [string]$PermissionObject.companyGroup) -or
+                    (-not [string]::IsNullOrEmpty([string]$PermissionObject.companyGroup) -and ([string]$_.CompanyGroup -eq [string]$PermissionObject.companyGroup -or $companyGroupMatchValues -contains [string]$_.CompanyGroup)) -or
                     ([string]::IsNullOrEmpty([string]$PermissionObject.companyGroup) -and [string]::IsNullOrEmpty([string]$_.CompanyGroup) -and [string]$_.Company -eq [string]$PermissionObject.company)
                 )
             })
@@ -206,15 +206,22 @@ try {
         $ProfileID = $null
         if ($currentPermissions.Count -eq 0) {
             Write-Information 'User has no roles yet, retrieving profileId from organizationRole'
-            # Same query as the permissions script; the role is selected on its key afterwards
-            $splatGetOrgRole = @{
-                Uri     = "$($actionContext.Configuration.BaseUrl)/odata/v2.0/OrganizationRole?`$filter=databaseID eq $DatabaseID"
-                Method  = 'GET'
-                Headers = $headers
+            # Same query as the permissions script; the role is selected on its key afterwards.
+            # Follow @odata.nextLink so the role is also found when the result is paged.
+            $orgRoleUri = "$($actionContext.Configuration.BaseUrl)/odata/v2.0/OrganizationRole?`$filter=databaseID eq $DatabaseID"
+            $orgRole = $null
+            while ($null -eq $orgRole -and -not [string]::IsNullOrWhiteSpace($orgRoleUri)) {
+                $splatGetOrgRole = @{
+                    Uri     = $orgRoleUri
+                    Method  = 'GET'
+                    Headers = $headers
+                }
+                $orgRoleResponse = Invoke-RestMethod @splatGetOrgRole -Verbose:$false
+                $orgRole = $orgRoleResponse.value |
+                    Where-Object { [string]$_.Key -eq [string]$actionContext.References.Permission.id } |
+                    Select-Object -First 1
+                $orgRoleUri = $orgRoleResponse.'@odata.nextLink'
             }
-            $orgRole = (Invoke-RestMethod @splatGetOrgRole -Verbose:$false).value |
-                Where-Object { [string]$_.Key -eq [string]$actionContext.References.Permission.id } |
-                Select-Object -First 1
             if ($null -ne $orgRole) {
                 $ProfileID = $orgRole.ProfileId
                 Write-Information "ProfileId retrieved: $ProfileID"

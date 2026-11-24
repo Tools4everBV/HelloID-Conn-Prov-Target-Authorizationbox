@@ -148,6 +148,8 @@ try {
             throw "Expected one companyGroup for [$DefaultCompany] in database [$DatabaseID]"
         }
         $companyGroupId = $companyGroups[0].key
+        # Authorizationbox may return the key or the code of the company group in companyGroupCode; accept both when comparing
+        $companyGroupMatchValues = @([string]$companyGroups[0].key, [string]$companyGroups[0].code) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
     }
 
     # Get user to retrieve key for user data lookup
@@ -163,21 +165,19 @@ try {
     }
 
     # Get current user data from Authorizationbox
-    if ($null -ne $correlatedAccount) {
-        Write-Information 'Retrieving current user data from Authorizationbox'
-        $splatGetUserData = @{
-            Uri     = "$($actionContext.Configuration.BaseUrl)/api/v2.0/Users/($($correlatedAccount.key))/GetUserDataForUser"
-            Method  = 'GET'
-            Headers = $headers
-        }
+    Write-Information 'Retrieving current user data from Authorizationbox'
+    $splatGetUserData = @{
+        Uri     = "$($actionContext.Configuration.BaseUrl)/api/v2.0/Users/($($correlatedAccount.key))/GetUserDataForUser"
+        Method  = 'GET'
+        Headers = $headers
+    }
 
-        try {
-            $currentUserData = (Invoke-RestMethod @splatGetUserData -Verbose:$false)
-        }
-        catch {
-            Write-Warning "Could not retrieve current user data: $($_.Exception.Message)"
-            $currentUserData = $null
-        }
+    try {
+        $currentUserData = (Invoke-RestMethod @splatGetUserData -Verbose:$false)
+    }
+    catch {
+        Write-Warning "Could not retrieve current user data: $($_.Exception.Message)"
+        $currentUserData = $null
     }
     
     ## Get roles first and fill current permissions AB, to not remove any roles that do not exist on the user
@@ -412,7 +412,7 @@ try {
             if ($currentPermissionsAB -and $currentPermissionsAB.Count -gt 0) {
                 $inABRole = $currentPermissionsAB | Where-Object {
                     $_.Id -eq $permission.organizationRoleCode -and (
-                        (-not [string]::IsNullOrEmpty([string]$permission.companyGroup) -and [string]$_.CompanyGroup -eq [string]$permission.companyGroup) -or
+                        (-not [string]::IsNullOrEmpty([string]$permission.companyGroup) -and ([string]$_.CompanyGroup -eq [string]$permission.companyGroup -or ([string]$permission.companyGroup -eq [string]$companyGroupId -and $companyGroupMatchValues -contains [string]$_.CompanyGroup))) -or
                         ([string]::IsNullOrEmpty([string]$permission.companyGroup) -and [string]::IsNullOrEmpty([string]$_.CompanyGroup) -and [string]$_.Company -eq [string]$permission.company)
                     )
                 } | Select-Object -First 1
@@ -460,7 +460,7 @@ try {
 
                 $alreadyInAB = $null -ne ($currentPermissionsAB | Where-Object {
                         $_.Id -eq $permission.organizationRoleCode -and (
-                            (-not [string]::IsNullOrEmpty([string]$permission.companyGroup) -and [string]$_.CompanyGroup -eq [string]$permission.companyGroup) -or
+                            (-not [string]::IsNullOrEmpty([string]$permission.companyGroup) -and ([string]$_.CompanyGroup -eq [string]$permission.companyGroup -or ([string]$permission.companyGroup -eq [string]$companyGroupId -and $companyGroupMatchValues -contains [string]$_.CompanyGroup))) -or
                             ([string]::IsNullOrEmpty([string]$permission.companyGroup) -and [string]::IsNullOrEmpty([string]$_.CompanyGroup) -and [string]$_.Company -eq [string]$permission.company)
                         )
                     })

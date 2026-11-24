@@ -27,6 +27,9 @@ All notable changes to this project will be documented in this file. The format 
 - Sub-permissions role lookup now escapes single quotes and URL-encodes the OData filter
 - Create now stops with an error when correlation is not configured
 - Grant retrieved the profileId of an arbitrary role on the first role assignment (invalid OrganizationRole URI)
+- Grant now follows `@odata.nextLink` when looking up the profileId, so the role is also found when the OrganizationRole result is paged
+- Grant, revoke and sub-permissions now match a company group in Authorizationbox on both its key and its code, as `companyGroupCode` may contain either
+- Removed a redundant null check on the correlated account in the grant, revoke and sub-permissions scripts
 
 ## [1.0.0]
 

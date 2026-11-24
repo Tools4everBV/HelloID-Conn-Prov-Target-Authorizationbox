@@ -116,6 +116,8 @@ try {
             throw "Expected one companyGroup for [$DefaultCompany] in database [$DatabaseID]"
         }
         $companyGroupId = $companyGroups[0].key
+        # Authorizationbox may return the key or the code of the company group in companyGroupCode; accept both when comparing
+        $companyGroupMatchValues = @([string]$companyGroups[0].key, [string]$companyGroups[0].code) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
     }
 
     # Get user to retrieve key for user data lookup
@@ -131,21 +133,19 @@ try {
     }
 
     # Get current user data from Authorizationbox
-    if ($null -ne $correlatedAccount) {
-        Write-Information 'Retrieving current user data from Authorizationbox'
-        $splatGetUserData = @{
-            Uri     = "$($actionContext.Configuration.BaseUrl)/api/v2.0/Users/($($correlatedAccount.key))/GetUserDataForUser"
-            Method  = 'GET'
-            Headers = $headers
-        }
-        
-        try {
-            $currentUserData = (Invoke-RestMethod @splatGetUserData -Verbose:$false)
-        }
-        catch {
-            Write-Warning "Could not retrieve current user data: $($_.Exception.Message)"
-            $currentUserData = $null
-        }
+    Write-Information 'Retrieving current user data from Authorizationbox'
+    $splatGetUserData = @{
+        Uri     = "$($actionContext.Configuration.BaseUrl)/api/v2.0/Users/($($correlatedAccount.key))/GetUserDataForUser"
+        Method  = 'GET'
+        Headers = $headers
+    }
+
+    try {
+        $currentUserData = (Invoke-RestMethod @splatGetUserData -Verbose:$false)
+    }
+    catch {
+        Write-Warning "Could not retrieve current user data: $($_.Exception.Message)"
+        $currentUserData = $null
     }
 
     ## Get roles to check if permission exists
@@ -188,7 +188,7 @@ try {
     if ($currentPermissions -and $currentPermissions.Count -gt 0) {
         $inABRole = $currentPermissions | Where-Object {
             $_.Id -eq $PermissionObject.organizationRoleCode -and (
-                (-not [string]::IsNullOrEmpty([string]$PermissionObject.companyGroup) -and [string]$_.CompanyGroup -eq [string]$PermissionObject.companyGroup) -or
+                (-not [string]::IsNullOrEmpty([string]$PermissionObject.companyGroup) -and ([string]$_.CompanyGroup -eq [string]$PermissionObject.companyGroup -or $companyGroupMatchValues -contains [string]$_.CompanyGroup)) -or
                 ([string]::IsNullOrEmpty([string]$PermissionObject.companyGroup) -and [string]::IsNullOrEmpty([string]$_.CompanyGroup) -and [string]$_.Company -eq [string]$PermissionObject.company)
             )
         } | Select-Object -First 1
