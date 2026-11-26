@@ -28,6 +28,7 @@
     - [Account Reference](#account-reference)
   - [Remarks](#remarks)
     - [Requests and Sub-Permissions Model](#requests-and-sub-permissions-model)
+    - [Entitlement import](#entitlement-import)
     - [Creation/Correlation via Business Central](#creationcorrelation-via-business-central)
   - [Development Resources](#development-resources)
     - [API Endpoints](#api-endpoints)
@@ -46,8 +47,8 @@ The following features are available:
 | **Account Lifecycle**                     | ✅         | Create/Correlate, Update, Enable, Disable, Delete |                          |
 | **Permissions (SubPermissions)**          | ✅         | Permissions & Sub-permissions         |                          |
 | **Resources**                             | ❌         | -                                    |                          |
-| **Entitlement Import: Accounts**          | ❌         | -                                    |                          |
-| **Entitlement Import: Permissions**       | ❌         | -                                    |                          |
+| **Entitlement Import: Accounts**          | ✅         | -                                    | See [Entitlement import](#entitlement-import) |
+| **Entitlement Import: Permissions**       | ✅         | -                                    | Permissions (roles) only, not sub-permissions |
 | **Governance Reconciliation Resolutions** | ❌         | -                                    | Not supported            |
 
 Governance Reconciliation is not supported.
@@ -103,6 +104,15 @@ The account reference is set during create/correlate and contains `userSecurityI
 - In the Delete step, the user is closed (not hard-deleted) by sending the same request as the Disable step. Fully deleting users can cause issues in DynamicsEmpire; therefore, we disable users instead. Hard deletion is possible but may cause problems during reboarding. The Delete action is usually not used in Authorizationbox implementations; be sure to check whether it is needed in your implementation.
 
 - Be careful when updating employeeNoExternal as this can cause new users to appear in Empire.
+
+### Entitlement import
+
+- `import.ps1` imports all users of the configured database from `/odata/v2.0/Users`. The account reference has the same shape as the one set by create (`userSecurityId`, `fullName`, `userName`). Users without a `userSecurityId` are skipped. When a `userSecurityId` occurs twice in a database, only the first user the API returns is imported, the same user the lifecycle scripts act on.
+- Only fields that exist on the OData `Users` entity are filled in the imported account data. Fields that are only available through `GetUserDataForUser` stay empty, to avoid one extra call per user.
+- The Authorizationbox API exposes no account status, so every account is imported as enabled.
+- The account reference contains `fullName` and `userName`, which the update script does not refresh. When these change in Authorizationbox after correlation, the imported reference differs from the stored reference. Check how HelloID links these accounts before relying on the account import.
+- `permissions/import.ps1` imports the role assignments (`/odata/v2.0/OrgRolesPerUser`) for the permissions from `permissions.ps1` (reference `Id` = OrganizationRole key). Use the same `$DefaultCompany` / `$UseCompanyGroup` values as in the grant and revoke scripts: only role assignments on that company or company group are imported. Roles that are assigned through sub-permissions on the same scope are also reported for the permission with the same role.
+- Sub-permissions are not imported.
 
 ### Creation/correlation via Business Central
 

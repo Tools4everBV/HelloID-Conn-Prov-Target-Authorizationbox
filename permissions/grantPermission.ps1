@@ -246,6 +246,11 @@ try {
             foreach ($fieldName in $userValueData.Keys) {
                 $userValueSourcesModel | Add-Member -NotePropertyName $fieldName -NotePropertyValue $userValueData[$fieldName]
             }
+
+            # Gender is an enum in Authorizationbox and must be sent as a number (0 = blank, 1 = Female, 2 = Male)
+            if ($userValueSourcesModel.PSObject.Properties.Name -contains 'gender') {
+                $userValueSourcesModel.gender = [int]"$($userValueSourcesModel.gender)"
+            }
         }
         else {
             Throw "No current user data available, authorization request cannot be processed"

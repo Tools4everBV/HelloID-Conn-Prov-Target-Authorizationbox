@@ -163,6 +163,11 @@ try {
                     $userValueSourcesModel | Add-Member -NotePropertyName $fieldName -NotePropertyValue $userValueData[$fieldName]
                 }
 
+                # Gender is an enum in Authorizationbox and must be sent as a number (0 = blank, 1 = Female, 2 = Male)
+                if ($userValueSourcesModel.PSObject.Properties.Name -contains 'gender') {
+                    $userValueSourcesModel.gender = [int]"$($userValueSourcesModel.gender)"
+                }
+
                 $authorization | Add-Member -NotePropertyName "userValueSourcesModel" -NotePropertyValue $userValueSourcesModel
             }
             catch {
@@ -218,7 +223,6 @@ try {
 
             break
         }
-
 
         'NotFound' {
             Write-Information "AuthorizationBox account with userSecurityId [$($actionContext.References.Account.userSecurityId)] in database [$DatabaseID] not found. It may not exist or was deleted."            
